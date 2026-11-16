@@ -1,0 +1,70 @@
+name: Daten und Seite
+
+# Baut die Jahresdaten (HRDF über VXstone/NGE-fahrplan) und veröffentlicht die Seite auf GitHub Pages.
+# - Release "daten": fahrplan.json.gz + stand.json (auch zum lokalen Testen)
+# - GitHub Pages: web/ samt web/data/ (nur vom Branch main)
+on:
+  schedule:
+    - cron: "41 4 * * 3,6"        # mittwochs und samstags (HRDF erscheint Di/Fr)
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "Fahrplanjahr (leer = aktuelles, im Dezember das nächste)"
+        required: false
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daten-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bauen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: VXstone/NGE-fahrplan
+          path: lib/nge
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: HRDF holen und alle Bahnfahrten des Jahres herausschneiden
+        continue-on-error: true
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.year }}" ]; then ARGS="--year ${{ inputs.year }}"; fi
+          python lib/nge/tools/fahrplandaten.py roh $ARGS
+      - name: Jahresdaten für die Seite bauen
+        run: python tools/build_data.py --nge lib/nge --roh roh --out web/data
+      - name: Release "daten" aktualisieren
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view daten >/dev/null 2>&1 || \
+            gh release create daten --title "Fahrplandaten (automatisch)" \
+              --notes "Wird vom Workflow 'Daten und Seite' erzeugt. Siehe stand.json." --target "${{ github.sha }}"
+          gh release upload daten web/data/fahrplan.json.gz web/data/stand.json --clobber
+          ls -la web/data
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: web
+
+  veroeffentlichen:
+    needs: bauen
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
