@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fahrplan verstehen</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body><div class="viz-root">
+<h1>Fahrplan verstehen</h1>
+<p class="sub" id="sub">Lade Fahrplandaten …</p>
+
+<form id="wahl" class="wahl" autocomplete="off">
+  <label>Von<input id="inA" list="bhf" placeholder="z.B. Bern oder BN" required></label>
+  <label>Über<input id="inV" list="bhf" placeholder="optional"></label>
+  <label>Nach<input id="inB" list="bhf" placeholder="z.B. Thun" required></label>
+  <button type="submit" class="go">Strecke zeigen</button>
+  <button type="button" class="chip" id="tausch" title="Richtung tauschen">⇄</button>
+  <datalist id="bhf"></datalist>
+</form>
+<div class="datum" id="datumbar">
+  <button type="button" class="chip" id="dPrev">◀</button>
+  <input type="date" id="inD">
+  <button type="button" class="chip" id="dNext">▶</button>
+  <span id="wtag" class="muted"></span>
+  <button type="button" class="chip" id="dHeute">heute</button>
+</div>
+<div id="meldung" class="meldung"></div>
+
+<div id="haupt" hidden>
+  <h2 id="titel" class="titel"></h2>
+  <nav class="sec"><a href="#bf">Bildfahrplan</a><a href="#lupe">Knotenlupe</a><a href="#kb">Kursbuch</a><a href="#kr">Kreuzungen</a><a href="#an">Anschlüsse</a></nav>
+  <div class="bar" id="legend"></div>
+  <div id="bf"></div>
+  <div id="lupe"></div>
+  <div class="panel" id="panel"></div>
+  <div id="kb"></div>
+  <div id="kr"></div>
+  <div id="an"></div>
+</div>
+<p class="note" id="note"></p>
+</div>
+<script src="app.js"></script>
+</body></html>
