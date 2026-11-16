@@ -347,10 +347,15 @@ function legend() {
 const runsOn_ = () => C.runs.filter(r => on[r.series]);
 
 // ---------------- Bildfahrplan ----------------
+let BFL = null;   // Masse der zuletzt gezeichneten Grafik (für den Druck)
 const shortName = n => n.replace(/ - .*$/, "").replace(/ \(.*\)$/, "");
 function drawBF(scroll) {
   const host = $("bf"); host.innerHTML = "";
-  host.appendChild(h("h2", "Bildfahrplan <span style='font-weight:400;color:var(--text-muted);font-size:12px'>Strecke waagrecht nach km, Zeit nach unten · Band oben: ═ zweigleisig, ─ eingleisig, ┄ unbekannt (antippen zum Ändern)</span>"));
+  const bh = h("div", null); bh.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:22px 0 6px";
+  bh.appendChild(h("h2", "Bildfahrplan <span style='font-weight:400;color:var(--text-muted);font-size:12px'>Strecke waagrecht nach km, Zeit nach unten · Band oben: ═ zweigleisig, ─ eingleisig, ┄ unbekannt (antippen zum Ändern)</span>")).style.margin = "0";
+  const pv = h("button", "🖨 Ausschnitt drucken / PDF", "chip"); pv.onclick = () => printBF("view"); bh.appendChild(pv);
+  const pd = h("button", "🖨 ganzer Tag als PDF", "chip"); pd.title = "mehrere Seiten A4 quer; mit Zeitmassstab 2× oder 4× werden es mehr Seiten mit mehr Platz"; pd.onclick = () => printBF("day"); bh.appendChild(pd);
+  host.appendChild(bh);
   const head = h("div", null, "chartbox"); head.style.cssText = "overflow:hidden;border-bottom:0;border-radius:10px 10px 0 0";
   const box = h("div", null, "chartbox"); box.style.borderRadius = "0 0 10px 10px"; box.style.maxHeight = "70vh";
   host.appendChild(head); host.appendChild(box);
@@ -362,6 +367,7 @@ function drawBF(scroll) {
   const xk = kf => { const i = Math.floor(kf), f = kf - i; return i >= C.km.length - 1 ? X(C.km[C.km.length - 1]) : X(C.km[i] + (C.km[i + 1] - C.km[i]) * f); };
   const H = MT + (T1 - T0) * PY + MB;
   const hs = el("svg", { width: avail - 2, height: HT, "aria-hidden": "true" }, head);
+  BFL = { ML, MT, HT, PY, T0, T1, W: avail - 2, box, hs };
   const svg = el("svg", { id: "bfsvg", width: avail - 2, height: H, role: "img", "aria-label": "Bildfahrplan" }, box);
   // Gleisband
   C.single.forEach((sg, k) => {
@@ -522,12 +528,13 @@ function lupe(s, tc, hlKey, noScroll) {
 
 // ---------------- Kursbuch ----------------
 let kbAll = false;
-function drawKB() {
-  const host = $("kb"); host.innerHTML = "";
+function drawKB(target, printCols) {
+  const host = target || $("kb"); host.innerHTML = "";
   const hd = h("div", null); hd.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:22px 0 6px";
   hd.appendChild(h("h2", "Kursbuch")).style.margin = "0";
   const now = new Date(); const nm = now.getHours() * 60 + now.getMinutes();
-  const tb = h("button", kbAll ? "nur ±3 h um jetzt" : "ganzer Tag", "chip"); tb.onclick = () => { kbAll = !kbAll; drawKB(); }; hd.appendChild(tb);
+  if (!printCols) { const tb = h("button", kbAll ? "nur ±3 h um jetzt" : "ganzer Tag", "chip"); tb.onclick = () => { kbAll = !kbAll; drawKB(); }; hd.appendChild(tb);
+    const pk = h("button", "🖨 Kursbuch drucken / PDF", "chip"); pk.onclick = () => printKB(); hd.appendChild(pk); }
   host.appendChild(hd);
   for (const dir of [1, -1]) {
     const order = C.stations.map((n, i) => i); if (dir < 0) order.reverse();
@@ -536,6 +543,8 @@ function drawKB() {
     if (!kbAll) runs = runs.filter(r => timD(r.ev[r.ev.length - 1]) >= nm - 180 && timD(r.ev[0]) <= nm + 180);
     host.appendChild(h("h3", `${esc(C.stations[order[0]])} → ${esc(C.stations[order[order.length - 1]])} · ${kbAll ? total : runs.length + " von " + total} Fahrten`));
     if (!runs.length) continue;
+    const allRuns = runs; const step = printCols || allRuns.length;
+    for (let b0 = 0; b0 < allRuns.length; b0 += step) { runs = allRuns.slice(b0, b0 + step);
     const wrap = h("div", null, "tblwrap"), T = h("table", null, "kb"); wrap.appendChild(T); host.appendChild(wrap);
     let html = "<thead><tr><th class='st'></th>" + runs.map(r => `<th class="tr" data-id="${r.id}" style="--c:var(${SER[r.series].c})">${esc(r.series)}<br>${esc(r.fnr)}</th>`).join("") + "</tr></thead><tbody>";
     html += "<tr><td class='st anab'>von</td>" + runs.map(r => `<td class="vn" data-id="${r.id}">${r.von !== C.stations[r.ev[0][0]] ? esc(r.von) : ""}</td>`).join("") + "</tr>";
@@ -566,8 +575,53 @@ function drawKB() {
     html += "<tr><td class='st anab'>nach</td>" + runs.map(r => `<td class="vn" data-id="${r.id}">${r.nach !== C.stations[r.ev[r.ev.length - 1][0]] ? esc(r.nach) : ""}</td>`).join("") + "</tr></tbody>";
     T.innerHTML = html;
     T.querySelectorAll("th.tr").forEach(th => th.onclick = () => { select(th.dataset.id); $("bf").scrollIntoView({ behavior: "smooth" }); });
-  }
+    } }
   host.appendChild(h("p", "„|“ = Durchfahrt. Strich über der Zeit = Zug beginnt hier, Strich unter der Zeit = Zug endet hier (↺ = vermutlich Wende). ↑ = kommt von einer anderen Strecke, ↓ = fährt auf einer anderen Strecke weiter (Tooltip). Bahnhöfe ohne Halt sind ausgeblendet.", "note"));
+}
+
+// ---------------- Druck / PDF ----------------
+function printHeader(what) {
+  const d = state.date, wd = WD[new Date(d + "T12:00:00").getDay()];
+  return h("div", `<div class="druckkopf"><b>${esc(what)} · ${esc(D.S[state.a].name)} → ${esc(D.S[state.b].name)}${state.via != null ? " über " + esc(D.S[state.via].name) : ""}</b> · ${wd} ${dateDE(d)}<br><span>Quelle: HRDF (opentransportdata.swiss), Stand ${esc(D.meta.erzeugt)} · Kilometer Luftlinie, Gleiszahl aus Fahrplan geschätzt · vxstone.github.io/fahrplan-verstehen</span></div>`);
+}
+function doPrint(node) {
+  let P = $("druck"); if (P) P.remove();
+  P = h("div", null); P.id = "druck"; P.appendChild(node); document.querySelector(".viz-root").appendChild(P);
+  document.body.classList.add("drucken");
+  const done = () => { document.body.classList.remove("drucken"); P.remove(); window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  setTimeout(() => { try { window.print(); } catch (e) { done(); alert("Drucken ist hier nicht möglich – bitte die Seite direkt im Browser öffnen."); } }, 50);
+}
+function bfPage(y0, y1) {   // y0/y1 in Koordinaten der Grafik (ohne Kopf)
+  const L = BFL, body = $("bfsvg"), Hh = y1 - y0;
+  const out = el("svg", { viewBox: `0 0 ${L.W} ${L.HT + Hh}`, class: "druckbild", xmlns: NS });
+  for (const c of L.hs.childNodes) out.appendChild(c.cloneNode(true));
+  const inner = el("svg", { x: 0, y: L.HT, width: L.W, height: Hh, viewBox: `0 ${y0} ${L.W} ${Hh}` }, out);
+  for (const c of body.childNodes) { const k = c.cloneNode(true); if (k.classList) k.classList.remove("hl"); inner.appendChild(k); }
+  return out;
+}
+function printBF(mode) {
+  const L = BFL, wrap = h("div", null);
+  if (mode === "view") {
+    const y0 = L.box.scrollTop, y1 = y0 + L.box.clientHeight;
+    const t0 = L.T0 + (y0 - L.MT) / L.PY, t1 = L.T0 + (y1 - L.MT) / L.PY;
+    const pg = h("div", null, "druckseite"); pg.appendChild(printHeader(`Bildfahrplan ${fmt(t0)}–${fmt(t1)}`)); pg.appendChild(bfPage(y0, y1)); wrap.appendChild(pg);
+  } else {
+    // nur Stunden mit Zügen; Stunden je Seite so, dass A4 quer gefüllt ist (hängt vom Zeitmassstab ab)
+    const ts = C.runs.flatMap(r => r.ev.map(e => timD(e))).filter(v => v != null);
+    const a = Math.max(L.T0, Math.floor(Math.min(...ts) / 60) * 60), b = Math.min(L.T1, Math.ceil(Math.max(...ts) / 60) * 60);
+    const per = Math.max(60, Math.floor(((L.W / 1.5 - L.HT) / L.PY) / 60) * 60);
+    for (let t = a; t < b; t += per) { const u = Math.min(b, t + per);
+      const pg = h("div", null, "druckseite"); pg.appendChild(printHeader(`Bildfahrplan ${fmt(t)}–${fmt(u)}`));
+      pg.appendChild(bfPage(L.MT + (t - L.T0) * L.PY - 4, L.MT + (u - L.T0) * L.PY + 4)); wrap.appendChild(pg); }
+  }
+  doPrint(wrap);
+}
+function printKB() {
+  const wrap = h("div", null), pg = h("div", null, "druckseite");
+  pg.appendChild(printHeader("Kursbuch")); const box = h("div", null); pg.appendChild(box); wrap.appendChild(pg);
+  const keep = kbAll; kbAll = true; drawKB(box, 22); kbAll = keep;
+  doPrint(wrap);
 }
 
 // ---------------- Kreuzungen ----------------
