@@ -21,9 +21,14 @@ const timD = e => e[2] != null ? e[2] : e[1];
 // ---------------- Daten ----------------
 let D = null;            // {meta, S:[{uic,name,lat,lon,abbr}], T:[trip], byStation: Map}
 async function loadData() {
-  const r = await fetch("data/fahrplan.json.gz");
-  if (!r.ok) throw new Error("Fahrplandaten nicht gefunden (" + r.status + ")");
-  const buf = new Uint8Array(await r.arrayBuffer());
+  let r = await fetch("data/fahrplan.json.gz"), buf;
+  if (r.ok) buf = new Uint8Array(await r.arrayBuffer());
+  else {   // Ersatz für Hosts, die keine .gz-Dateien ausliefern: gleiche Datei base64-kodiert
+    r = await fetch("data/fahrplan.b64.txt");
+    if (!r.ok) throw new Error("Fahrplandaten nicht gefunden (" + r.status + ")");
+    const b64 = (await r.text()).trim(); const bin = atob(b64); buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  }
   let text;
   if (buf[0] === 0x1f && buf[1] === 0x8b) {
     const ds = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
@@ -634,7 +639,7 @@ function updateURL() {
   const p = new URLSearchParams(); p.set("von", D.S[state.a].name); p.set("nach", D.S[state.b].name);
   if (state.via != null) p.set("ueber", D.S[state.via].name); p.set("datum", state.date);
   const ov = Object.entries(state.single).map(([k, v]) => k + ":" + (v ? 1 : 2)).join(","); if (ov) p.set("gleise", ov);
-  history.replaceState(null, "", "?" + p.toString());
+  try { history.replaceState(null, "", "?" + p.toString()); } catch (e) { /* in eingebetteten Vorschauen nicht erlaubt */ }
 }
 function go() {
   const a = findStation($("inA").value), b = findStation($("inB").value), v = $("inV").value.trim() ? findStation($("inV").value) : null;
@@ -669,5 +674,7 @@ function setDate(d) {
   if (d < m.start || d > m.end) d = m.start > d ? m.start : m.end;
   state.date = d; $("inD").value = d; $("wtag").textContent = WD[new Date(d + "T12:00:00").getDay()];
   if (p.get("gleise")) p.get("gleise").split(",").forEach(x => { const [k, v] = x.split(":"); state.single[k] = v === "1"; });
+  if (!(p.get("von") && p.get("nach"))) { const m = $("meldung"); m.appendChild(h("span", "Beispiele: ", "muted"));
+    [["Andelot", "Saint-Claude"], ["Neuchâtel", "Frasne"], ["Biel/Bienne", "Moutier"], ["Bern", "Thun"]].forEach(([x, y]) => { const b = h("button", esc(x + " – " + y), "chip"); b.onclick = () => { $("inA").value = x; $("inB").value = y; $("inV").value = ""; go(); }; m.appendChild(b); }); }
   if (p.get("von") && p.get("nach")) { $("inA").value = p.get("von"); $("inB").value = p.get("nach"); $("inV").value = p.get("ueber") || ""; const keep = { ...state.single }; go(); if (Object.keys(keep).length) { state.single = keep; recompute(false); } }
 })();
