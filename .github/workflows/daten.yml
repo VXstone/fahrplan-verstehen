@@ -44,6 +44,16 @@ jobs:
           python lib/nge/tools/fahrplandaten.py roh $ARGS
       - name: Jahresdaten für die Seite bauen
         run: python tools/build_data.py --nge lib/nge --roh roh --out web/data
+      - name: Publikation (grafische Fahrpläne SBB) aufbereiten
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          JAHR=$(python -c "import gzip,json;print(json.load(gzip.open('web/data/fahrplan.json.gz','rt'))['meta']['end'][:4])")
+          gh release download grafapla-$JAHR -R VXstone/NGE-fahrplan -p "grafapla_${JAHR}_zuege.json.gz" -D roh --clobber
+          gh release download fahrplandaten -R VXstone/NGE-fahrplan -p stations.csv -D roh --clobber
+          python tools/build_pub.py --zuege roh/grafapla_${JAHR}_zuege.json.gz --fahrplan web/data/fahrplan.json.gz \
+            --stations roh/stations.csv --out web/data
       - name: Release "daten" aktualisieren
         env:
           GH_TOKEN: ${{ github.token }}
@@ -52,6 +62,7 @@ jobs:
             gh release create daten --title "Fahrplandaten (automatisch)" \
               --notes "Wird vom Workflow 'Daten und Seite' erzeugt. Siehe stand.json." --target "${{ github.sha }}"
           gh release upload daten web/data/fahrplan.json.gz web/data/stand.json --clobber
+          if [ -s web/data/publikation.json.gz ]; then gh release upload daten web/data/publikation.json.gz --clobber; fi
           ls -la web/data
       - uses: actions/upload-pages-artifact@v3
         if: github.ref == 'refs/heads/main'

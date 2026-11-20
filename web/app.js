@@ -20,12 +20,12 @@ const timD = e => e[2] != null ? e[2] : e[1];
 
 // ---------------- Daten ----------------
 let D = null;            // {meta, S:[{uic,name,lat,lon,abbr}], T:[trip], byStation: Map}
-async function loadData() {
-  let r = await fetch("data/fahrplan.json.gz"), buf;
+async function fetchGz(name) {
+  let r = await fetch(`data/${name}.json.gz`), buf;
   if (r.ok) buf = new Uint8Array(await r.arrayBuffer());
   else {   // Ersatz für Hosts, die keine .gz-Dateien ausliefern: gleiche Datei base64-kodiert
-    r = await fetch("data/fahrplan.b64.txt");
-    if (!r.ok) throw new Error("Fahrplandaten nicht gefunden (" + r.status + ")");
+    r = await fetch(`data/${name}.b64.txt`);
+    if (!r.ok) throw new Error(`${name}: Daten nicht gefunden (` + r.status + ")");
     const b64 = (await r.text()).trim(); const bin = atob(b64); buf = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
   }
@@ -34,7 +34,10 @@ async function loadData() {
     const ds = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
     text = await new Response(ds).text();
   } else text = new TextDecoder().decode(buf);
-  const raw = JSON.parse(text);
+  return JSON.parse(text);
+}
+async function loadData() {
+  const raw = await fetchGz("fahrplan");
   const S = raw.st.map(([uic, name, lat, lon, abbr]) => ({ uic, name, lat, lon, abbr }));
   const T = raw.tr.map(([fnr, admin, cat, line, bf, flat], i) => {
     const st = [], arr = [], dep = [], pass = [];
@@ -48,7 +51,78 @@ async function loadData() {
   T.forEach(t => { const k = t.fnr; if (!byFnr.has(k)) byFnr.set(k, []); byFnr.get(k).push(t); });
   D = { meta: raw.meta, S, T, byStation, byFnr, BF: raw.bf };
 }
+// ---------------- Publikation (grafische Fahrpläne SBB) ----------------
+// Kategorien: R Reisezug, G Güterzug, L Lok-/Leerfahrt. VP nach Zeichenerklärung SBB (1 = Mo … 7 = So).
+const PKAT = { R: "Reisezug (publ.)", G: "Güterzug (publ.)", L: "Lok/Leer (publ.)" };
+let PUB = null, pubLoading = null;
+async function loadPub() {
+  if (PUB) return PUB;
+  if (!pubLoading) pubLoading = (async () => {
+    const raw = await fetchGz("publikation");
+    const base = D.S.length;
+    raw.st_add.forEach(([uic, name, lat, lon, abbr]) => D.S.push({ uic, name, lat, lon, abbr }));
+    const T = raw.tr.map(([zug, kat, felder, vp, flat], k) => {
+      const st = [], arr = [], dep = [], pass = [];
+      for (let j = 0; j < flat.length; j += 4) { st.push(flat[j]); arr.push(flat[j + 1]); dep.push(flat[j + 2]); pass.push(!!flat[j + 3]); }
+      arr[0] = null; dep[dep.length - 1] = null;
+      return { i: 1e6 + k, fnr: zug, admin: "PUB", cat: kat, line: PKAT[kat], bf: null, pub: true, kat, felder, vp, VP: String(vp).split("|").map(vpDecode), st, arr, dep, pass };
+    });
+    const byStation = new Map(), byFnr = new Map();
+    T.forEach(t => new Set(t.st).forEach(s => { if (!byStation.has(s)) byStation.set(s, []); byStation.get(s).push(t.i - 1e6); }));
+    T.forEach(t => { const k = t.fnr; if (!byFnr.has(k)) byFnr.set(k, []); byFnr.get(k).push(t); });
+    PUB = { meta: raw.meta, T, byStation, byFnr, base };
+    return PUB;
+  })();
+  return pubLoading;
+}
+function vpDecode(code) {
+  const r = { roh: code, tage: [], wt: false, folgetag: 0, begrenzt: false, unklar: false };
+  const m = /^([+-]?)(\d{2,3})(\*?)$/.exec(String(code || "").trim());
+  if (!m) { r.unklar = true; return r; }
+  const [, sg, c, st] = m; r.folgetag = sg === "+" ? 1 : sg === "-" ? -1 : 0; r.begrenzt = !!st;
+  const span = (x, y) => { const o = [x]; while (o[o.length - 1] !== y && o.length < 8) o.push(o[o.length - 1] % 7 + 1); return o; };
+  const GEN = { 10: [1, 3], 20: [2, 4], 30: [3, 5], 40: [4, 6], 50: [5, 7], 60: [1, 6], 70: [2, 7] }, WT2 = { 68: [1, 5], 78: [7, 4], 69: [6, 7], 79: [5, 6] };
+  if (c.length === 2) {
+    if (c === "00") r.unklar = true;
+    else if (GEN[c]) r.tage = GEN[c];
+    else if (WT2[c]) { r.tage = span(...WT2[c]); r.wt = true; }
+    else if (c[0] === "0") r.tage = [+c[1]];
+    else if (c[0] >= "1" && c[0] <= "7" && c[1] >= "1" && c[1] <= "7") r.tage = span(+c[0], +c[1]);
+    else r.unklar = true;
+  } else {
+    const [x, y, z] = [...c].map(Number);
+    if (z === 9 && x >= 1 && x <= 7 && y >= 1 && y <= 7) { r.tage = span(x, y); r.wt = true; }
+    else if (y === 0) r.tage = [...new Set([x, z])];
+    else if (z === 8) { r.tage = span(x, y); r.unklar = true; }
+    else if (x < y && y < z) r.tage = [x, y, z];
+    else r.tage = span(x, y).filter(d => d !== z);
+  }
+  return r;
+}
+const WTAG = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+function vpText(vs) { return (Array.isArray(vs) ? vs : [vs]).map(vpText1).join(" bzw. "); }
+function vpText1(v) {
+  if (v.unklar && !v.tage.length) return "Verkehrstage unklar";
+  const n = v.tage.map(d => WTAG[d % 7]);
+  const t = n.length === 7 ? "täglich" : n.length > 2 && v.tage.every((d, i) => i === 0 || d === v.tage[i - 1] % 7 + 1) ? n[0] + "–" + n[n.length - 1] : n.join(", ");
+  return (v.wt ? "Werktage " : "") + t + (v.folgetag > 0 ? " (Folgetag)" : "") + (v.begrenzt ? ", zeitweise" : "") + (v.unklar ? " (?)" : "");
+}
+// SYFA-Kalender: eidg. Feiertage gelten als Sonntag (betrifft vor allem die Werktags-VP)
+function syfaDay(date) {
+  const d = new Date(date + "T12:00:00Z"); const y = d.getUTCFullYear();
+  const md = date.slice(5);
+  const easter = (() => { const a = y % 19, b = Math.floor(y / 100), c = y % 100, dd = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3),
+    h2 = (19 * a + b - dd - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h2 - k) % 7, m2 = Math.floor((a + 11 * h2 + 22 * l) / 451);
+    const mo = Math.floor((h2 + l - 7 * m2 + 114) / 31), da = ((h2 + l - 7 * m2 + 114) % 31) + 1; return `${y}-${String(mo).padStart(2, "0")}-${String(da).padStart(2, "0")}`; })();
+  const fei = new Set(["01-01", "08-01", "12-25"].map(x => `${y}-${x}`).concat([1, 39, 50].map(n => addDays(easter, n)), [addDays(easter, -2)]));
+  if (fei.has(date)) return 7;
+  const w = d.getUTCDay(); return w === 0 ? 7 : w;
+}
+function runsOnPub(t, date) {
+  return t.VP.some(v => { if (!v.tage.length) return true; const ref = v.folgetag ? addDays(date, -v.folgetag) : date; return v.tage.includes(syfaDay(ref)); });
+}
 function runsOn(t, date) {
+  if (t.pub) return runsOnPub(t, date);
   if (!t.bf) return true;
   const hexs = D.BF[t.bf]; if (hexs == null) return true;
   const i = dayDiff(date, D.meta.start) + D.meta.offset;
@@ -173,14 +247,15 @@ function buildCorridor0(a, b, via) {
 }
 
 // ---------------- Fahrten des Tages auf der Strecke ----------------
-function dayTrips(date, stationSet) {
+function dayTrips(date, stationSet, src) {
   // alle Fahrten des Tages, die die Strecke berühren; gleiche Zugnummer wird durchgebunden
+  src = src || { byStation: D.byStation, byFnr: D.byFnr, T: D.T, off: 0 };
   const seen = new Set(), list = [];
-  for (const s of stationSet) for (const ti of D.byStation.get(s) || []) if (!seen.has(ti)) { seen.add(ti); const t = D.T[ti]; if (runsOn(t, date)) list.push(t); }
+  for (const s of stationSet) for (const ti of src.byStation.get(s) || []) if (!seen.has(ti)) { seen.add(ti); const t = src.T[ti]; if (runsOn(t, date)) list.push(t); }
   // Durchbindung: gleiche Nummer + Verwaltung, Ende = Anfang
   const extra = new Map();
   for (const t of list) { const k = t.fnr; if (!extra.has(k)) extra.set(k, []); }
-  for (const k of extra.keys()) extra.set(k, D.byFnr.get(k).filter(t => runsOn(t, date)));
+  for (const k of extra.keys()) extra.set(k, src.byFnr.get(k).filter(t => runsOn(t, date)));
   const joined = [], done = new Set();
   for (const [, ts] of extra) {
     const arr = ts.slice().sort((x, y) => (x.dep.find(v => v != null) ?? 0) - (y.dep.find(v => v != null) ?? 0));
@@ -205,7 +280,53 @@ function dayTrips(date, stationSet) {
 
 // ---------------- Modell für Strecke + Tag ----------------
 let C = null;          // aktuelles Modell
-const state = { a: null, b: null, via: null, date: null, single: {} };
+const state = { a: null, b: null, via: null, date: null, single: {}, quelle: "tag" };
+const nrKey = f => String(f).replace(/^0+/, "").replace(/\+\d+$/, "").replace(/[A-Za-z]+$/, "");
+const VGL = { gleich: "wie publiziert", abw: "abweichend (> 3′)", nurP: "publiziert, verkehrt heute nicht", nurT: "verkehrt, nicht publiziert", G: "Güterzug (nur Publikation)", L: "Lok/Leer (nur Publikation)" };
+// Tagesfahrplan (HRDF) und Publikation über die Zugnummer abgleichen
+function compareTrips(hr, pb, ids) {
+  const idset = new Set(ids), byNr = new Map();
+  for (const t of hr) { const k = nrKey(t.fnr); if (!byNr.has(k)) byNr.set(k, []); byNr.get(k).push(t); }
+  const cd = (x, y) => { const d = Math.abs(x - y) % 1440; return Math.min(d, 1440 - d); };
+  const used = new Set(), out = [], stat = { gleich: 0, abw: 0, nurP: 0, nurT: 0, G: 0, L: 0 }, rows = [];
+  const setS = (t, key, info) => { t.series = VGL[key]; t.name = `${t.series === VGL.G || t.series === VGL.L ? "" : t.cats.join("/") + " "}${nrKey(t.fnr)}`; t.vgl = { key, ...info }; stat[key]++; out.push(t); };
+  for (const p of pb) {
+    if (p.kat !== "R") { setS(p, p.kat, {}); continue; }
+    if (p.st.filter(x => idset.has(x)).length < 2) continue;   // berührt die Strecke nur in einem Bahnhof
+    const cands = byNr.get(nrKey(p.fnr)) || [];
+    let best = null;
+    for (const h0 of cands) {
+      const dif = [];
+      p.st.forEach((s, i) => { if (!idset.has(s)) return; const j = h0.st.indexOf(s); if (j < 0) return;
+        const c = []; if (h0.dep[j] != null && p.dep[i] != null) c.push(cd(h0.dep[j], p.dep[i])); if (h0.arr[j] != null && p.arr[i] != null) c.push(cd(h0.arr[j], p.arr[i]));
+        if (c.length) dif.push({ s, d: Math.min(...c), th: h0.dep[j] ?? h0.arr[j], tp: p.dep[i] ?? p.arr[i] }); });
+      if (!dif.length) continue;
+      const mx = Math.max(...dif.map(x => x.d));
+      if (!best || mx < best.mx) best = { h: h0, mx, dif };
+    }
+    if (!best) {
+      // kein Gegenstück auf dieser Strecke: nur zählen, wenn die Publikation die Strecke wirklich befährt
+      if (p.st.filter(s => idset.has(s)).length >= 2) { setS(p, "nurP", {}); rows.push({ key: "nurP", t: p }); }
+      continue;
+    }
+    if (used.has(best.h.i)) continue;   // schon über einen anderen Teil derselben Nummer zugeordnet
+    used.add(best.h.i);
+    const key = best.mx <= 3 ? "gleich" : "abw";
+    const w = best.dif.reduce((a, b) => (b.d > a.d ? b : a));
+    setS(best.h, key, { mx: best.mx, at: w.s, th: w.th, tp: w.tp, vp: p.vp });
+    if (key === "abw") rows.push({ key, t: best.h, w });
+  }
+  // HRDF-Fahrten ohne Publikation: nur auf Strecken, die publiziert sind (Felder der SBB)
+  const pubSt = new Set(pb.filter(p => p.kat === "R").flatMap(p => p.st));
+  for (const t of hr) {
+    if (used.has(t.i)) continue;
+    if (t.st.filter(s => idset.has(s) && pubSt.has(s)).length >= 2) { setS(t, "nurT", {}); rows.push({ key: "nurT", t }); }
+    else { t.vgl = null; out.push(t); }
+  }
+  VGLSTAT = { stat, rows };
+  return out;
+}
+let VGLSTAT = null;
 let on = {}, scale = 1, sel = null, SER = {}, SERIES = [];
 
 function model() {
@@ -213,7 +334,11 @@ function model() {
   if (!cor) return null;
   const ids = cor.ids; const idx = new Map(ids.map((s, i) => [s, i]));
   const km = [0]; for (let i = 1; i < ids.length; i++) km.push(km[i - 1] + Math.max(0.3, hav(D.S[ids[i - 1]], D.S[ids[i]])));
-  const trips = dayTrips(state.date, ids);
+  let trips;
+  const PS = PUB && { byStation: PUB.byStation, byFnr: PUB.byFnr, T: PUB.T };
+  if (state.quelle === "pub" && PS) trips = dayTrips(state.date, ids, PS);
+  else if (state.quelle === "vgl" && PS) trips = compareTrips(dayTrips(state.date, ids), dayTrips(state.date, ids, PS), ids);
+  else trips = dayTrips(state.date, ids);
   const runs = [], touch = [];
   for (const t of trips) {
     const pos = []; t.st.forEach((s, i) => { if (idx.has(s)) pos.push(i); });
@@ -308,7 +433,13 @@ const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7"];
 function assignSeries() {
   const cnt = new Map(); C.runs.forEach(r => cnt.set(r.series, (cnt.get(r.series) || 0) + Math.abs(C.km[r.ev[r.ev.length - 1][0]] - C.km[r.ev[0][0]])));
   const keys = [...cnt.entries()].sort((a, b) => b[1] - a[1]).map(x => x[0]);
-  SERIES = keys.map((k, i) => ({ k, label: k, c: i < SLOTS.length ? SLOTS[i] : "--text-muted", dash: /^(TGV|ICE|EC|RJX?|NJ|EN)/.test(k) }));
+  const FIX = state.quelle === "tag" ? {} : {
+    [VGL.gleich]: ["--good", false], [VGL.abw]: ["--bad", false], [VGL.nurP]: ["--warn", true], [VGL.nurT]: ["--s7", false],
+    [VGL.G]: ["--s1", false], [VGL.L]: ["--text-muted", true], [PKAT.R]: ["--s2", false], [PKAT.G]: ["--s1", false], [PKAT.L]: ["--text-muted", true] };
+  const ORD = Object.keys(FIX); if (ORD.length) keys.sort((a, b) => (ORD.indexOf(a) + 1 || 99) - (ORD.indexOf(b) + 1 || 99));
+  let slot = 0;
+  SERIES = keys.map(k => FIX[k] ? { k, label: k, c: FIX[k][0], dash: FIX[k][1] }
+    : { k, label: k, c: slot < SLOTS.length ? SLOTS[slot++] : "--text-muted", dash: /^(TGV|ICE|EC|RJX?|NJ|EN)/.test(k) });
   SER = Object.fromEntries(SERIES.map(s => [s.k, s]));
   for (const s of SERIES) if (on[s.k] == null) on[s.k] = true;
 }
@@ -322,6 +453,9 @@ function showPanel(r) {
   ${r.prev ? `<div class="muted">← von ${esc(r.orig[0])} ab ${fmt(r.orig[1])} · vorher ${esc(r.prev[0])} ${fmt(r.prev[1])}</div>` : ""}
   ${r.from ? `<div class="muted">↺ vermutlich aus ${esc(r.from.name)} (von ${esc(r.from.von)}, an ${fmt(r.from.arr)})</div>` : ""}
   <div class="stops">${r.ev.map(e => `<span class="${e[3] ? "" : "pass"}">${esc(C.stations[e[0]])} ${e[3] ? (e[1] != null && e[2] != null && Math.round(e[2]) - Math.round(e[1]) >= 2 ? fmt(e[1]) + "–" + fmt(e[2]) : fmt(tim(e))) : "| ~" + fmt(e[1])}</span>`).join("")}</div>
+  ${r.t.pub ? `<div class="muted">Publikation: VP ${esc(r.t.vp)} = ${esc(vpText(r.t.VP))} · Fahrplanfeld ${esc(r.t.felder.join(", "))}</div>` : ""}
+  ${r.t.vgl && r.t.vgl.key === "abw" ? `<div class="w-bad">Abweichung zur Publikation: bis ${Math.round(r.t.vgl.mx)}′ (${esc(D.S[r.t.vgl.at].name)}: heute ${fmt(r.t.vgl.th)}, publiziert ${fmt(r.t.vgl.tp)})</div>` : ""}
+  ${r.t.vgl && r.t.vgl.key === "gleich" ? `<div class="muted">wie publiziert (max. ${Math.round(r.t.vgl.mx)}′ Unterschied, VP ${esc(r.t.vgl.vp)})</div>` : ""}
   ${r.next ? `<div class="muted">→ weiter: ${esc(r.next[0])} an ${fmt(r.next[1])} · Ziel ${esc(r.dest[0])} an ${fmt(r.dest[1])}</div>` : ""}
   ${r.cont ? `<div class="muted">↺ vermutlich weiter als ${esc(r.cont.name)} ab ${fmt(r.cont.dep)} → ${esc(r.cont.nach)} an ${fmt(r.cont.arr)} (Vermutung)</div>` : ""}`;
 }
@@ -360,7 +494,7 @@ function drawBF(scroll) {
   const box = h("div", null, "chartbox"); box.style.borderRadius = "0 0 10px 10px"; box.style.maxHeight = "70vh";
   host.appendChild(head); host.appendChild(box);
   const avail = Math.max(340, host.clientWidth || 900);
-  const ML = 40, MR = 46, HT = 118, MT = 10, MB = 20, T0 = 4 * 60, T1 = 25 * 60;
+  const ML = 40, MR = 46, HT = 118, MT = 10, MB = 20, T0 = state.quelle === "tag" ? 4 * 60 : 0, T1 = 25 * 60;
   const W = avail - ML - MR - 2, PY = 1.15 * scale;
   const kmMax = C.km[C.km.length - 1] || 1;
   const X = k => ML + (k / kmMax) * W, Y = t => MT + (t - T0) * PY;
@@ -469,7 +603,7 @@ function stationEvents(s) {
       prev: i > 0 ? nm(i - 1) : null, next: i < t.st.length - 1 ? nm(i + 1) : null, destArr: t.arr[t.arr.length - 1] }); }); }
   // Fahrten, die hier halten, aber die Strecke nicht berühren (andere Linien am Knoten)
   const have = new Set(C.trips.map(t => t.i));
-  for (const ti of D.byStation.get(s) || []) { const t = D.T[ti]; if (have.has(ti) || !runsOn(t, state.date)) continue;
+  for (const ti of (state.quelle === "pub" ? [] : D.byStation.get(s) || [])) { const t = D.T[ti]; if (have.has(ti) || !runsOn(t, state.date)) continue;
     t.st.forEach((x, i) => { if (x !== s || t.pass[i]) return; const nm = j => D.S[t.st[j]].name;
       out.push({ key: t.i, name: tLabel(t), series: series(t), arr: t.arr[i], dep: t.dep[i], von: nm(0), nach: nm(t.st.length - 1),
         prev: i > 0 ? nm(i - 1) : null, next: i < t.st.length - 1 ? nm(i + 1) : null, destArr: t.arr[t.arr.length - 1] }); }); }
@@ -671,6 +805,41 @@ function drawAN() {
   host.appendChild(h("p", `Erster Anschluss je nächstem Halt ab ${MIN}′ Umsteigezeit: grün ≤10′, gelb ≤20′, rot ≤60′, grau länger; · = zurück in Ankunftsrichtung; ⚠ = weniger als ${MIN}′ nach Ankunft (knapp verpasst). Alle Züge am Bahnhof, auch anderer Strecken.`, "note"));
 }
 
+// ---------------- Vergleich Tag ↔ Publikation ----------------
+function drawVGL() {
+  const host = $("vgl"); host.innerHTML = "";
+  if (state.quelle === "tag" || !PUB) return;
+  const m = PUB.meta;
+  if (state.quelle === "pub") {
+    host.appendChild(h("p", `Publizierter Fahrplan aus den grafischen Fahrplänen der SBB (Fahrplanperiode, ${m.felder} Fahrplanfelder, Stand ${esc(m.erzeugt)}). Gezeigt sind alle Züge, deren Verkehrsperiode den Wochentag des gewählten Datums enthält; eidg. Feiertage zählen als Sonntag. Baustellen und Tagesänderungen sind darin <b>nicht</b> enthalten – dafür «Vergleich».`, "note"));
+    return;
+  }
+  if (!VGLSTAT) return;
+  const { stat, rows } = VGLSTAT;
+  const chip = (k, txt) => `<span class="chip" style="cursor:default"><span class="sw" style="background:var(${SER[VGL[k]] ? SER[VGL[k]].c : "--text-muted"})"></span>${txt}</span>`;
+  let html = `<div class="bar" style="margin:10px 0 4px">${chip("gleich", `${stat.gleich} wie publiziert`)}${chip("abw", `${stat.abw} abweichend`)}${chip("nurP", `${stat.nurP} publiziert, heute nicht`)}${chip("nurT", `${stat.nurT} heute zusätzlich`)}${chip("G", `${stat.G} Güterzüge`)}</div>`;
+  const list = rows.filter(r => r.key !== "gleich").sort((a, b) => (timD(a.t.dep.map((x, i) => [0, a.t.arr[i], x])[0]) ?? 0) - (timD(b.t.dep.map((x, i) => [0, b.t.arr[i], x])[0]) ?? 0));
+  if (list.length) {
+    html += "<div class='tblwrap'><table class='list' style='margin:4px 8px'><tr><th>Zug</th><th>Status</th><th>Lauf</th><th>Detail</th></tr>";
+    for (const r of list.slice(0, 200)) { const t = r.t, nm = j => D.S[t.st[j]].name;
+      const t0 = t.dep.find(v => v != null);
+      const det = r.key === "abw" ? `${esc(D.S[t.vgl.at].name)}: heute ${fmt(t.vgl.th)}, publiziert ${fmt(t.vgl.tp)} (${Math.round(t.vgl.mx)}′)` : r.key === "nurP" ? `VP ${esc(t.vp)} = ${esc(vpText(t.VP))}` : "keine Zugnummer in der Publikation";
+      html += `<tr><td>${esc(t.name)}</td><td>${esc(VGL[r.key])}</td><td>${esc(nm(0))} ${fmt(t0)} → ${esc(nm(t.st.length - 1))}</td><td>${det}</td></tr>`; }
+    html += "</table></div>";
+  }
+  html += `<p class="note">Abgleich über die Zugnummer an den Bahnhöfen dieser Strecke: «wie publiziert» = höchstens 3′ Unterschied. «Publiziert, heute nicht» = Zug laut Verkehrsperiode an diesem Wochentag, aber nicht im Tagesfahrplan (Bauarbeiten, Ausfall, saisonal – die Publikation kennt Verkehrsperioden mit * nur als «zeitweise»). «Heute zusätzlich» = im Tagesfahrplan, aber ohne gleiche Nummer in der Publikation (Extrazüge, Ersatzkonzepte, andere Nummer). Güterzüge gibt es nur in der Publikation. Quelle Publikation: grafische Fahrpläne SBB (tp-info.ch), automatisch ausgelesen; Reisezüge stimmen zu 98 % auf ±1,5′ mit der HRDF überein.</p>`;
+  host.innerHTML = html;
+}
+async function setQuelle(q) {
+  state.quelle = q;
+  document.querySelectorAll("#quelle button").forEach(b => b.setAttribute("aria-pressed", b.dataset.q === q));
+  if (q !== "tag" && !PUB) {
+    $("meldung").textContent = "Lade Publikation (grafische Fahrpläne) …";
+    try { await loadPub(); } catch (e) { $("meldung").textContent = "Publikation nicht verfügbar: " + e.message; state.quelle = "tag"; return; }
+  }
+  if (state.a != null) recompute(false);
+}
+
 // ---------------- Ablauf ----------------
 function renderViews(scroll) { assignSeries(); legend(); drawBF(scroll); drawKB(); drawKR(); drawAN(); }
 function recompute(scroll) {
@@ -679,8 +848,10 @@ function recompute(scroll) {
   if (!C) { $("haupt").hidden = true; $("meldung").textContent = "Keine Fahrten gefunden, die diese Bahnhöfe verbinden. Versuche einen Bahnhof bei «Über»."; return; }
   $("haupt").hidden = false; sel = null;
   const d = state.date, wd = WD[new Date(d + "T12:00:00").getDay()];
-  $("titel").textContent = `${D.S[state.a].name} → ${D.S[state.b].name}${state.via != null ? " über " + D.S[state.via].name : ""} · ${wd} ${dateDE(d)}`;
+  const qtxt = { tag: "", pub: ` · Publikation (grafischer Fahrplan) für ${WTAG[syfaDay(d) % 7]}`, vgl: " · Vergleich mit Publikation" }[state.quelle];
+  $("titel").textContent = `${D.S[state.a].name} → ${D.S[state.b].name}${state.via != null ? " über " + D.S[state.via].name : ""} · ${wd} ${dateDE(d)}${qtxt}`;
   let msg = `${C.runs.length} Fahrten auf ${Math.round(C.km[C.km.length - 1])} km`;
+  drawVGL();
   if (C.cor.joined) msg += ` · zusammengesetzt über ${C.cor.joined.map(s => D.S[s].name).join(", ")}`;
   $("meldung").innerHTML = esc(msg);
   if (C.cor.variants.length) { const m = $("meldung"); m.appendChild(h("span", " · andere Wege: ", "muted"));
@@ -692,6 +863,7 @@ function recompute(scroll) {
 function updateURL() {
   const p = new URLSearchParams(); p.set("von", D.S[state.a].name); p.set("nach", D.S[state.b].name);
   if (state.via != null) p.set("ueber", D.S[state.via].name); p.set("datum", state.date);
+  if (state.quelle !== "tag") p.set("quelle", state.quelle);
   const ov = Object.entries(state.single).map(([k, v]) => k + ":" + (v ? 1 : 2)).join(","); if (ov) p.set("gleise", ov);
   try { history.replaceState(null, "", "?" + p.toString()); } catch (e) { /* in eingebetteten Vorschauen nicht erlaubt */ }
 }
@@ -722,6 +894,7 @@ function setDate(d) {
   $("dPrev").onclick = () => setDate(addDays(state.date, -1));
   $("dNext").onclick = () => setDate(addDays(state.date, 1));
   $("dHeute").onclick = () => setDate(new Date().toISOString().slice(0, 10));
+  document.querySelectorAll("#quelle button").forEach(b => b.onclick = () => setQuelle(b.dataset.q));
   $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen.";
   const p = new URLSearchParams(location.search);
   let d = p.get("datum") || new Date().toISOString().slice(0, 10);
@@ -730,5 +903,6 @@ function setDate(d) {
   if (p.get("gleise")) p.get("gleise").split(",").forEach(x => { const [k, v] = x.split(":"); state.single[k] = v === "1"; });
   if (!(p.get("von") && p.get("nach"))) { const m = $("meldung"); m.appendChild(h("span", "Beispiele: ", "muted"));
     [["Andelot", "Saint-Claude"], ["Neuchâtel", "Frasne"], ["Biel/Bienne", "Moutier"], ["Bern", "Thun"]].forEach(([x, y]) => { const b = h("button", esc(x + " – " + y), "chip"); b.onclick = () => { $("inA").value = x; $("inB").value = y; $("inV").value = ""; go(); }; m.appendChild(b); }); }
+  if (["pub", "vgl"].includes(p.get("quelle"))) { state.quelle = p.get("quelle"); document.querySelectorAll("#quelle button").forEach(b => b.setAttribute("aria-pressed", b.dataset.q === state.quelle)); try { await loadPub(); } catch (e) { state.quelle = "tag"; } }
   if (p.get("von") && p.get("nach")) { $("inA").value = p.get("von"); $("inB").value = p.get("nach"); $("inV").value = p.get("ueber") || ""; const keep = { ...state.single }; go(); if (Object.keys(keep).length) { state.single = keep; recompute(false); } }
 })();

@@ -10,6 +10,10 @@ dann zeigt die Seite für diesen Tag:
 - **Kursbuch** beider Richtungen (an/ab, „|“ Durchfahrt, Striche für Beginn/Ende, ↑/↓ andere Strecke).
 - **Kreuzungen** auf eingleisigen Abschnitten mit Puffer je Richtung.
 - **Anschlüsse** an einem wählbaren Bahnhof.
+- **Publikation / Vergleich**: Umschalter neben dem Datum. «Publikation» zeigt den publizierten Fahrplan aus den
+  grafischen Fahrplänen der SBB (mit **Güterzügen** und Lok-/Leerfahrten) für den Wochentag des gewählten Datums.
+  «Vergleich» legt den Tagesfahrplan (HRDF) über die Publikation: wie publiziert, abweichend (> 3′),
+  publiziert aber heute nicht, heute zusätzlich – mit Liste.
 
 Seite: GitHub Pages dieses Repos. Alles läuft im Browser, ohne Server.
 
@@ -21,6 +25,15 @@ Der Workflow `Daten und Seite` (mittwochs und samstags, auf Knopfdruck und bei j
    [opentransportdata.swiss](https://opentransportdata.swiss) und schneidet alle Bahnfahrten des Fahrplanjahres heraus,
 2. baut mit `tools/build_data.py` die kompakte Jahresdatei `web/data/fahrplan.json.gz` (mit Verkehrstagen),
 3. legt sie zusätzlich ins Release `daten` und veröffentlicht `web/` auf GitHub Pages.
+
+### Publikation `publikation.json.gz`
+
+`tools/build_pub.py` nimmt die aus den grafischen Fahrplänen ausgelesenen Züge
+(Release `grafapla-<Jahr>` von VXstone/NGE-fahrplan, Datei `grafapla_<Jahr>_zuege.json.gz`),
+verbindet die Stücke je Zugnummer über die Fahrplanfelder und verwirft Reisezug-Stücke, deren Nummer
+laut HRDF anderswo fährt (Fehllesungen). Format: `{meta, st_add, tr: [[zugnr, kat R|G|L, felder, vp, [station, an, ab, durchfahrt, …]]]}`;
+`st_add` wird an `st` angehängt. Verkehrsperioden nach der Zeichenerklärung der SBB (`15` = Mo–Fr, `269` = Werktage Di–Sa,
+`+` = Folgetag, `*` = zeitweise); eidg. Feiertage zählen als Sonntag.
 
 ### Datenformat `fahrplan.json.gz`
 

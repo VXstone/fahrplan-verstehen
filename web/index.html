@@ -23,12 +23,16 @@
   <button type="button" class="chip" id="dNext">▶</button>
   <span id="wtag" class="muted"></span>
   <button type="button" class="chip" id="dHeute">heute</button>
+  <span class="ctl" id="quelle" title="Tagesfahrplan aus der HRDF oder publizierter Fahrplan aus den grafischen Fahrplänen der SBB (mit Güterzügen)">
+    <button type="button" data-q="tag" aria-pressed="true">Tagesfahrplan</button><button type="button" data-q="pub" aria-pressed="false">Publikation</button><button type="button" data-q="vgl" aria-pressed="false">Vergleich</button>
+  </span>
 </div>
 <div id="meldung" class="meldung"></div>
 
 <div id="haupt" hidden>
   <h2 id="titel" class="titel"></h2>
   <nav class="sec"><a href="#bf">Bildfahrplan</a><a href="#lupe">Knotenlupe</a><a href="#kb">Kursbuch</a><a href="#kr">Kreuzungen</a><a href="#an">Anschlüsse</a></nav>
+  <div id="vgl"></div>
   <div class="bar" id="legend"></div>
   <div id="bf"></div>
   <div id="lupe"></div>
