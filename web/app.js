@@ -453,6 +453,7 @@ function showPanel(r) {
   ${r.prev ? `<div class="muted">← von ${esc(r.orig[0])} ab ${fmt(r.orig[1])} · vorher ${esc(r.prev[0])} ${fmt(r.prev[1])}</div>` : ""}
   ${r.from ? `<div class="muted">↺ vermutlich aus ${esc(r.from.name)} (von ${esc(r.from.von)}, an ${fmt(r.from.arr)})</div>` : ""}
   <div class="stops">${r.ev.map(e => `<span class="${e[3] ? "" : "pass"}">${esc(C.stations[e[0]])} ${e[3] ? (e[1] != null && e[2] != null && Math.round(e[2]) - Math.round(e[1]) >= 2 ? fmt(e[1]) + "–" + fmt(e[2]) : fmt(tim(e))) : "| ~" + fmt(e[1])}</span>`).join("")}</div>
+  <div><button class="chip" onclick="showZug('${esc(r.t.fnr)}','${r.t.pub ? "pub" : "tag"}')">Zuglauf auf der Karte ↗</button></div>
   ${r.t.pub ? `<div class="muted">Publikation: VP ${esc(r.t.vp)} = ${esc(vpText(r.t.VP))} · Fahrplanfeld ${esc(r.t.felder.join(", "))}</div>` : ""}
   ${r.t.vgl && r.t.vgl.key === "abw" ? `<div class="w-bad">Abweichung zur Publikation: bis ${Math.round(r.t.vgl.mx)}′ (${esc(D.S[r.t.vgl.at].name)}: heute ${fmt(r.t.vgl.th)}, publiziert ${fmt(r.t.vgl.tp)})</div>` : ""}
   ${r.t.vgl && r.t.vgl.key === "gleich" ? `<div class="muted">wie publiziert (max. ${Math.round(r.t.vgl.mx)}′ Unterschied, VP ${esc(r.t.vgl.vp)})</div>` : ""}
@@ -840,6 +841,94 @@ async function setQuelle(q) {
   if (state.a != null) recompute(false);
 }
 
+// ---------------- Zuglauf (Karte + Tabelle) ----------------
+// Aufruf: ?zug=<Nummer>[&quelle=pub|tag][&datum=…]; Absprung aus dem Zugpanel des Bildfahrplans.
+let NET = null;
+function netEdges() {   // Netz-Skelett aus allen Fahrten: Paare benachbarter Betriebspunkte
+  if (NET && NET.pub === !!PUB) return NET.e;
+  const seen = new Set(), e = [];
+  const add = t => { for (let i = 1; i < t.st.length; i++) { const a = t.st[i - 1], b = t.st[i]; const k = a < b ? a + "-" + b : b + "-" + a;
+    if (!seen.has(k)) { seen.add(k); e.push([a, b]); } } };
+  D.T.forEach(add); if (PUB) PUB.T.forEach(add);
+  NET = { e, pub: !!PUB }; return e;
+}
+function zugVarianten(nr, quelle, date) {
+  const k = nrKey(nr), out = [];
+  if (quelle !== "tag" && PUB) for (const t of PUB.T) if (nrKey(t.fnr) === k) out.push({ t, src: "pub", runs: runsOn(t, date) });
+  if (quelle !== "pub") for (const [f, ts] of D.byFnr) if (nrKey(f) === k) ts.forEach(t => out.push({ t, src: "tag", runs: runsOn(t, date) }));
+  return out;
+}
+async function showZug(nr, quelle, idx) {
+  quelle = quelle || state.zugQuelle || "pub";
+  if (quelle !== "tag" && !PUB) { try { await loadPub(); } catch (e) { quelle = "tag"; } }
+  state.zug = nr; state.zugQuelle = quelle;
+  const host = $("zug"); host.hidden = false; host.innerHTML = "";
+  let V = zugVarianten(nr, quelle, state.date);
+  if (!V.length && quelle === "pub") { V = zugVarianten(nr, "tag", state.date); quelle = "tag"; }
+  const hd = h("div", null); hd.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 0 6px";
+  hd.appendChild(h("h2", `Zuglauf ${esc(nrKey(nr))}`)).style.margin = "0";
+  const qs = h("span", null, "ctl"); qs.style.marginLeft = "0";
+  [["pub", "Publikation"], ["tag", "Tagesfahrplan"]].forEach(([q, l]) => { const b = h("button", l); b.setAttribute("aria-pressed", q === quelle); b.onclick = () => showZug(nr, q); qs.appendChild(b); });
+  hd.appendChild(qs);
+  const zu = h("button", "✕ schliessen", "chip"); zu.onclick = () => { host.hidden = true; state.zug = null; updateURL(); }; hd.appendChild(zu);
+  host.appendChild(hd);
+  if (!V.length) { host.appendChild(h("p", `Kein Zug mit der Nummer ${esc(nr)} ${quelle === "pub" ? "in der Publikation" : "im Tagesfahrplan"}.`, "meldung")); updateURL(); return; }
+  V.sort((a, b) => (b.runs - a.runs) || ((a.t.dep.find(x => x != null) ?? 0) - (b.t.dep.find(x => x != null) ?? 0)));
+  idx = Math.min(idx || 0, V.length - 1);
+  if (V.length > 1) { const bar = h("div", null, "bar");
+    V.forEach((v, i) => { const t = v.t, t0 = t.dep.find(x => x != null);
+      const b = h("button", `${esc(D.S[t.st[0]].name)} ${fmt(t0)} → ${esc(D.S[t.st[t.st.length - 1]].name)}${v.runs ? "" : " (nicht am " + dateDE(state.date) + ")"}`, "chip");
+      b.setAttribute("aria-pressed", i === idx); b.onclick = () => showZug(nr, quelle, i); bar.appendChild(b); });
+    host.appendChild(bar); }
+  const v = V[idx], t = v.t;
+  const info = t.pub ? `${PKAT[t.kat]} · VP ${esc(t.vp)} = ${esc(vpText(t.VP))} · Fahrplanfelder ${esc(t.felder.join(", "))}`
+    : `${esc(series(t))} · ${v.runs ? "verkehrt am " + dateDE(state.date) : "verkehrt nicht am " + dateDE(state.date)}`;
+  host.appendChild(h("p", info, "muted"));
+  // Karte
+  const pts = t.st.map(s => D.S[s]).filter(s => s.lat != null);
+  if (pts.length >= 2) {
+    const W = Math.max(340, Math.min(1100, host.clientWidth || 900)), H = Math.round(W * 0.62);
+    let la0 = Math.min(...pts.map(p => p.lat)), la1 = Math.max(...pts.map(p => p.lat)), lo0 = Math.min(...pts.map(p => p.lon)), lo1 = Math.max(...pts.map(p => p.lon));
+    const kx = Math.cos((la0 + la1) / 2 * Math.PI / 180);
+    let w = (lo1 - lo0) * kx, hh = la1 - la0; const pad = Math.max(w, hh) * 0.12 + 0.02;
+    const sc = Math.min((W - 20) / (w + 2 * pad), (H - 20) / (hh + 2 * pad));
+    const cx = (lo0 + lo1) / 2, cy = (la0 + la1) / 2;
+    const P = s => [W / 2 + (s.lon - cx) * kx * sc, H / 2 - (s.lat - cy) * sc];
+    const inBox = s => s.lat != null && Math.abs(s.lat - cy) * sc < H / 2 + 40 && Math.abs((s.lon - cx) * kx) * sc < W / 2 + 40;
+    const box = h("div", null, "chartbox"); box.style.maxHeight = "none"; host.appendChild(box);
+    const svg = el("svg", { width: W, height: H, role: "img", "aria-label": "Karte Zuglauf" }, box);
+    const gN = el("g", {}, svg);
+    for (const [a, b] of netEdges()) { const A = D.S[a], B = D.S[b]; if (!inBox(A) && !inBox(B)) continue; if (A.lat == null || B.lat == null) continue;
+      const p = P(A), q = P(B); el("line", { x1: p[0], y1: p[1], x2: q[0], y2: q[1], stroke: "var(--grid-strong)", "stroke-width": 1 }, gN); }
+    const col = t.pub ? ({ G: "--s1", R: "--s2", L: "--text-muted" }[t.kat]) : "--s2";
+    const path = t.st.map(s => D.S[s]).filter(s => s.lat != null).map(P);
+    el("path", { d: "M" + path.map(p => p.map(x => x.toFixed(1)).join(",")).join("L"), fill: "none", stroke: `var(${col})`, "stroke-width": 4, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: .9 }, svg);
+    const gL = el("g", {}, svg); const placed = [];
+    t.st.forEach((s, i) => { const S = D.S[s]; if (S.lat == null) return; const [x, y] = P(S);
+      const stop = !t.pass[i] || i === 0 || i === t.st.length - 1;
+      el("circle", { cx: x, cy: y, r: stop ? 4 : 2.5, fill: stop ? "var(--surface-1)" : `var(${col})`, stroke: `var(${col})`, "stroke-width": 2 }, gL);
+      if (placed.some(([px, py]) => Math.abs(px - x) < 70 && Math.abs(py - y) < 14) && i !== 0 && i !== t.st.length - 1) return;
+      placed.push([x, y]);
+      const tt = i === 0 ? fmt(t.dep[i]) : i === t.st.length - 1 ? fmt(t.arr[i]) : fmt(t.dep[i] ?? t.arr[i]);
+      const lab = el("text", { x: x + 7, y: y - 6, "font-size": 11, fill: "var(--text-primary)", "paint-order": "stroke", stroke: "var(--surface-1)", "stroke-width": 3 }, gL);
+      lab.textContent = `${S.name} ${tt}`; });
+  }
+  // Tabelle
+  let html = "<div class='tblwrap'><table class='list' style='margin:8px 8px'><tr><th>Betriebspunkt</th><th>an</th><th>ab</th><th></th></tr>";
+  t.st.forEach((s, i) => { const S = D.S[s];
+    html += `<tr><td>${esc(S.name)}${S.abbr ? ` <span class="muted">${esc(S.abbr)}</span>` : ""}</td><td>${i ? fmt(t.arr[i]) : ""}</td><td>${i < t.st.length - 1 ? fmt(t.dep[i]) : ""}</td><td class="muted">${t.pass[i] && i && i < t.st.length - 1 ? "Durchfahrt" : ""}</td></tr>`; });
+  host.appendChild(h("div", html + "</table></div>"));
+  // Absprung in den Bildfahrplan: erster und letzter Bahnhof, die die Suche kennt
+  const known = t.st.filter(s => D.byStation.has(s));
+  if (known.length >= 2) { const b = h("button", `Bildfahrplan ${esc(D.S[known[0]].name)} – ${esc(D.S[known[known.length - 1]].name)} zeigen`, "go");
+    b.onclick = async () => { $("inA").value = D.S[known[0]].name; $("inB").value = D.S[known[known.length - 1]].name; $("inV").value = "";
+      if (t.pub && state.quelle === "tag") await setQuelle("pub"); go(); $("haupt").scrollIntoView({ behavior: "smooth" }); };
+    host.appendChild(b); }
+  host.appendChild(h("p", "Karte: Luftlinien zwischen den Betriebspunkten, grau das Netz aus allen Fahrten. Kreise: Halt bzw. Anfang/Ende, Punkte: Durchfahrt.", "note"));
+  updateURL();
+  host.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 // ---------------- Ablauf ----------------
 function renderViews(scroll) { assignSeries(); legend(); drawBF(scroll); drawKB(); drawKR(); drawAN(); }
 function recompute(scroll) {
@@ -861,8 +950,10 @@ function recompute(scroll) {
   console.debug("Modell", Math.round(performance.now() - t0), "ms");
 }
 function updateURL() {
-  const p = new URLSearchParams(); p.set("von", D.S[state.a].name); p.set("nach", D.S[state.b].name);
+  const p = new URLSearchParams();
+  if (state.a != null) { p.set("von", D.S[state.a].name); p.set("nach", D.S[state.b].name); }
   if (state.via != null) p.set("ueber", D.S[state.via].name); p.set("datum", state.date);
+  if (state.zug) { p.set("zug", nrKey(state.zug)); if (state.zugQuelle === "tag") p.set("zugquelle", "tag"); }
   if (state.quelle !== "tag") p.set("quelle", state.quelle);
   const ov = Object.entries(state.single).map(([k, v]) => k + ":" + (v ? 1 : 2)).join(","); if (ov) p.set("gleise", ov);
   try { history.replaceState(null, "", "?" + p.toString()); } catch (e) { /* in eingebetteten Vorschauen nicht erlaubt */ }
@@ -895,6 +986,7 @@ function setDate(d) {
   $("dNext").onclick = () => setDate(addDays(state.date, 1));
   $("dHeute").onclick = () => setDate(new Date().toISOString().slice(0, 10));
   document.querySelectorAll("#quelle button").forEach(b => b.onclick = () => setQuelle(b.dataset.q));
+  $("zugform").addEventListener("submit", e => { e.preventDefault(); const v = $("inZ").value.trim(); if (v) showZug(v, PUB || state.quelle !== "tag" ? "pub" : "pub"); });
   $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen.";
   const p = new URLSearchParams(location.search);
   let d = p.get("datum") || new Date().toISOString().slice(0, 10);
@@ -904,5 +996,6 @@ function setDate(d) {
   if (!(p.get("von") && p.get("nach"))) { const m = $("meldung"); m.appendChild(h("span", "Beispiele: ", "muted"));
     [["Andelot", "Saint-Claude"], ["Neuchâtel", "Frasne"], ["Biel/Bienne", "Moutier"], ["Bern", "Thun"]].forEach(([x, y]) => { const b = h("button", esc(x + " – " + y), "chip"); b.onclick = () => { $("inA").value = x; $("inB").value = y; $("inV").value = ""; go(); }; m.appendChild(b); }); }
   if (["pub", "vgl"].includes(p.get("quelle"))) { state.quelle = p.get("quelle"); document.querySelectorAll("#quelle button").forEach(b => b.setAttribute("aria-pressed", b.dataset.q === state.quelle)); try { await loadPub(); } catch (e) { state.quelle = "tag"; } }
+  if (p.get("zug")) { $("inZ").value = p.get("zug"); showZug(p.get("zug"), p.get("zugquelle") || "pub"); }
   if (p.get("von") && p.get("nach")) { $("inA").value = p.get("von"); $("inB").value = p.get("nach"); $("inV").value = p.get("ueber") || ""; const keep = { ...state.single }; go(); if (Object.keys(keep).length) { state.single = keep; recompute(false); } }
 })();
