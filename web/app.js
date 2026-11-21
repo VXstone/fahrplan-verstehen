@@ -812,7 +812,7 @@ function drawVGL() {
   if (state.quelle === "tag" || !PUB) return;
   const m = PUB.meta;
   if (state.quelle === "pub") {
-    host.appendChild(h("p", `Publizierter Fahrplan aus den grafischen Fahrplänen der SBB (Fahrplanperiode, ${m.felder} Fahrplanfelder, Stand ${esc(m.erzeugt)}). Gezeigt sind alle Züge, deren Verkehrsperiode den Wochentag des gewählten Datums enthält; eidg. Feiertage zählen als Sonntag. Baustellen und Tagesänderungen sind darin <b>nicht</b> enthalten – dafür «Vergleich».`, "note"));
+    host.appendChild(h("p", `Publizierter Fahrplan aus den grafischen Fahrplänen (Quelle: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt; Fahrplanperiode, ${m.felder} Fahrplanfelder, Stand ${esc(m.erzeugt)}). Gezeigt sind alle Züge, deren Verkehrsperiode den Wochentag des gewählten Datums enthält; eidg. Feiertage zählen als Sonntag. Baustellen und Tagesänderungen sind darin <b>nicht</b> enthalten – dafür «Vergleich».`, "note"));
     return;
   }
   if (!VGLSTAT) return;
@@ -828,7 +828,7 @@ function drawVGL() {
       html += `<tr><td>${esc(t.name)}</td><td>${esc(VGL[r.key])}</td><td>${esc(nm(0))} ${fmt(t0)} → ${esc(nm(t.st.length - 1))}</td><td>${det}</td></tr>`; }
     html += "</table></div>";
   }
-  html += `<p class="note">Abgleich über die Zugnummer an den Bahnhöfen dieser Strecke: «wie publiziert» = höchstens 3′ Unterschied. «Publiziert, heute nicht» = Zug laut Verkehrsperiode an diesem Wochentag, aber nicht im Tagesfahrplan (Bauarbeiten, Ausfall, saisonal – die Publikation kennt Verkehrsperioden mit * nur als «zeitweise»). «Heute zusätzlich» = im Tagesfahrplan, aber ohne gleiche Nummer in der Publikation (Extrazüge, Ersatzkonzepte, andere Nummer). Güterzüge gibt es nur in der Publikation. Quelle Publikation: grafische Fahrpläne SBB (tp-info.ch), automatisch ausgelesen; Reisezüge stimmen zu 98 % auf ±1,5′ mit der HRDF überein.</p>`;
+  html += `<p class="note">Abgleich über die Zugnummer an den Bahnhöfen dieser Strecke: «wie publiziert» = höchstens 3′ Unterschied. «Publiziert, heute nicht» = Zug laut Verkehrsperiode an diesem Wochentag, aber nicht im Tagesfahrplan (Bauarbeiten, Ausfall, saisonal – die Publikation kennt Verkehrsperioden mit * nur als «zeitweise»). «Heute zusätzlich» = im Tagesfahrplan, aber ohne gleiche Nummer in der Publikation (Extrazüge, Ersatzkonzepte, andere Nummer). Güterzüge gibt es nur in der Publikation. Quelle Publikation: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt; automatisch ausgelesen; Reisezüge stimmen zu 98 % auf ±1,5′ mit der HRDF überein.</p>`;
   host.innerHTML = html;
 }
 async function setQuelle(q) {
@@ -924,7 +924,7 @@ async function showZug(nr, quelle, idx) {
     b.onclick = async () => { $("inA").value = D.S[known[0]].name; $("inB").value = D.S[known[known.length - 1]].name; $("inV").value = "";
       if (t.pub && state.quelle === "tag") await setQuelle("pub"); go(); $("haupt").scrollIntoView({ behavior: "smooth" }); };
     host.appendChild(b); }
-  host.appendChild(h("p", "Karte: Luftlinien zwischen den Betriebspunkten, grau das Netz aus allen Fahrten. Kreise: Halt bzw. Anfang/Ende, Punkte: Durchfahrt.", "note"));
+  host.appendChild(h("p", `Karte: Luftlinien zwischen den Betriebspunkten, grau das Netz aus allen Fahrten. Kreise: Halt bzw. Anfang/Ende, Punkte: Durchfahrt. Quelle: ${t.pub ? "grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt" : "HRDF, opentransportdata.swiss"}.`, "note"));
   updateURL();
   host.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -987,7 +987,7 @@ function setDate(d) {
   $("dHeute").onclick = () => setDate(new Date().toISOString().slice(0, 10));
   document.querySelectorAll("#quelle button").forEach(b => b.onclick = () => setQuelle(b.dataset.q));
   $("zugform").addEventListener("submit", e => { e.preventDefault(); const v = $("inZ").value.trim(); if (v) showZug(v, PUB || state.quelle !== "tag" ? "pub" : "pub"); });
-  $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen.";
+  $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen. «Publikation», «Vergleich» und Güterzüge: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt.";
   const p = new URLSearchParams(location.search);
   let d = p.get("datum") || new Date().toISOString().slice(0, 10);
   if (d < m.start || d > m.end) d = m.start > d ? m.start : m.end;

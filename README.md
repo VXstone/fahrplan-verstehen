@@ -63,3 +63,7 @@ cd web && python3 -m http.server
 ## Lizenzen
 
 Code: MIT. Fahrplandaten: opentransportdata.swiss (Nutzungsbedingungen der Plattform).
+Publikation/Güterzüge: aus den grafischen Fahrplänen, veröffentlicht von der Systemaufgabe Kundeninformation (SKI)
+auf [oev-info.ch](https://www.oev-info.ch/de/fahrplan-aktuell/grafische-fahrplaene), erstellt von SBB Infrastruktur
+(Fahrplan & Netzdesign) bzw. den jeweiligen Bahnen. **Die Lizenz bzw. die Nutzungsbedingungen für die Weiterverwendung sind
+ungeklärt**; die Daten sind automatisch ausgelesen und ohne Gewähr.
