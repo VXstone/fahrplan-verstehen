@@ -15,6 +15,14 @@ const addDays = (s, n) => { const d = new Date(s + "T12:00:00Z"); d.setUTCDate(d
 const dayDiff = (a, b) => Math.round((new Date(a + "T12:00:00Z") - new Date(b + "T12:00:00Z")) / 864e5);
 const hav = (a, b) => { if (a.lat == null || b.lat == null) return 0; const R = Math.PI / 180, la1 = a.lat * R, la2 = b.lat * R;
   const x = Math.sin((la2 - la1) / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin((b.lon - a.lon) * R / 2) ** 2; return 12742 * Math.asin(Math.sqrt(x)); };
+// Abstand Punkt–Strecke in km (lokal eben)
+function segKm(p, a, b) {
+  if (a.lat == null || b.lat == null) return 0;
+  const kx = 111.3 * Math.cos(p.lat * Math.PI / 180);
+  const ax = (a.lon - p.lon) * kx, ay = (a.lat - p.lat) * 111.3, bx = (b.lon - p.lon) * kx, by = (b.lat - p.lat) * 111.3;
+  const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L)) : 0;
+  return Math.hypot(ax + t * dx, ay + t * dy);
+}
 const tim = e => e[1] != null ? e[1] : e[2];
 const timD = e => e[2] != null ? e[2] : e[1];
 
@@ -349,7 +357,17 @@ function model() {
       const p0 = idx.get(t.st[cur[cur.length - 1]]), p1 = idx.get(t.st[pos[j]]);
       const prevDir = cur.length > 1 ? Math.sign(idx.get(t.st[cur[cur.length - 1]]) - idx.get(t.st[cur[cur.length - 2]])) : 0;
       const d = Math.sign(p1 - p0);
-      if (d === 0 || (prevDir && d !== prevDir)) { pieces.push(cur); cur = [pos[j]]; }
+      // Umweg: zwischen zwei Bahnhöfen der Strecke fährt der Zug über andere Betriebspunkte
+      // (z. B. Bergstrecke Kandersteg–Goppenstein statt Basistunnel) → nicht auf die Strecke legen
+      const i0 = cur[cur.length - 1], i1 = pos[j];
+      let umweg = false;
+      if (i1 - i0 > 1) {   // Zwischenpunkte des Zuges, die nicht auf der Strecke liegen: weiter als 3 km von ihr weg?
+        const lo = Math.min(p0, p1), hi = Math.max(p0, p1);
+        for (let k = i0 + 1; k < i1 && !umweg; k++) { const q = D.S[t.st[k]]; if (q.lat == null) continue;
+          let dmin = 1e9; for (let c = lo; c < hi; c++) dmin = Math.min(dmin, segKm(q, D.S[ids[c]], D.S[ids[c + 1]]));
+          if (dmin > 3) umweg = true; }
+      }
+      if (d === 0 || umweg || (prevDir && d !== prevDir)) { pieces.push(cur); cur = [pos[j]]; }
       else cur.push(pos[j]);
     }
     pieces.push(cur);
