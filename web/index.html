@@ -27,7 +27,12 @@
     <button type="button" data-q="tag" aria-pressed="true">Tagesfahrplan</button><button type="button" data-q="pub" aria-pressed="false">Publikation</button><button type="button" data-q="vgl" aria-pressed="false">Vergleich</button>
   </span>
 </div>
+<form id="zugform" class="datum" autocomplete="off" style="margin-top:4px">
+  <label class="muted" for="inZ">Zug</label><input id="inZ" placeholder="Zugnummer, z.B. 60102" style="width:170px">
+  <button type="submit" class="chip">Zuglauf zeigen</button>
+</form>
 <div id="meldung" class="meldung"></div>
+<div id="zug" hidden></div>
 
 <div id="haupt" hidden>
   <h2 id="titel" class="titel"></h2>
