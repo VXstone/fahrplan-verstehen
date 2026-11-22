@@ -54,6 +54,12 @@ jobs:
           gh release download fahrplandaten -R VXstone/NGE-fahrplan -p stations.csv -D roh --clobber
           python tools/build_pub.py --zuege roh/grafapla_${JAHR}_zuege.json.gz --fahrplan web/data/fahrplan.json.gz \
             --stations roh/stations.csv --out web/data
+      - name: Güterzug-Liste (Mo–So, Muster, Achse)
+        continue-on-error: true
+        run: |
+          pip install --quiet openpyxl
+          python tools/gz_list.py --pub web/data/publikation.json.gz --fahrplan web/data/fahrplan.json.gz \
+            --nge lib/nge --out web/data
       - name: Release "daten" aktualisieren
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,6 +69,9 @@ jobs:
               --notes "Wird vom Workflow 'Daten und Seite' erzeugt. Siehe stand.json." --target "${{ github.sha }}"
           gh release upload daten web/data/fahrplan.json.gz web/data/stand.json --clobber
           if [ -s web/data/publikation.json.gz ]; then gh release upload daten web/data/publikation.json.gz --clobber; fi
+          for f in gueterzuege.json gueterzuege.csv gueterzuege.xlsx; do
+            if [ -s web/data/$f ]; then gh release upload daten web/data/$f --clobber; fi
+          done
           ls -la web/data
       - uses: actions/upload-pages-artifact@v3
         if: github.ref == 'refs/heads/main'

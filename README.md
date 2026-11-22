@@ -38,6 +38,15 @@ laut HRDF anderswo fährt (Fehllesungen). Format: `{meta, st_add, tr: [[zugnr, k
 `st_add` wird an `st` angehängt. Verkehrsperioden nach der Zeichenerklärung der SBB (`15` = Mo–Fr, `269` = Werktage Di–Sa,
 `+` = Folgetag, `*` = zeitweise); eidg. Feiertage zählen als Sonntag.
 
+### Güterzug-Liste `gueterzuege.json` / `.csv` / `.xlsx`
+
+`tools/gz_list.py` macht aus der Publikation eine Liste aller Güterzüge (G 4xxxx–6xxxx, RhB G) mit
+Verkehrstagen Mo–So, Musterklasse (täglich, werktags, Wochenende, teilweise, einzelne Tage), Alpenachse,
+Von/Ab/Nach/An, Hauptknoten und Fahrplanfeldern: Teilstücke einer Nummer verkettet, Varianten ±10′ zusammengefasst.
+Die Spalten entsprechen dem Blatt «Güterzüge» der Güterzug-Tabelle; die Regeln stehen im Kopf des Skripts.
+Der Workflow legt die drei Dateien ins Release `daten`. Lokal:
+`python tools/gz_list.py --pub web/data/publikation.json.gz --fahrplan web/data/fahrplan.json.gz --nge ../NGE-fahrplan --out web/data`
+
 ### Datenformat `fahrplan.json.gz`
 
 ```
