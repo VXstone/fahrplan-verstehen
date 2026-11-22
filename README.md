@@ -17,6 +17,9 @@ dann zeigt die Seite für diesen Tag:
 
 Seite: GitHub Pages dieses Repos. Alles läuft im Browser, ohne Server.
 
+Übergabe für die Weiterarbeit (Arbeitsweise, Datenkette, Fallstricke, offene Schritte):
+[UEBERGABE.md in VXstone/NGE-fahrplan](https://github.com/VXstone/NGE-fahrplan/blob/main/UEBERGABE.md).
+
 ## Daten
 
 Der Workflow `Daten und Seite` (mittwochs und samstags, auf Knopfdruck und bei jedem Push auf `main`)
