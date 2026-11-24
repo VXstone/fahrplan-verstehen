@@ -50,6 +50,17 @@ Die Spalten entsprechen dem Blatt «Güterzüge» der Güterzug-Tabelle; die Reg
 Der Workflow legt die drei Dateien ins Release `daten`. Lokal:
 `python tools/gz_list.py --pub web/data/publikation.json.gz --fahrplan web/data/fahrplan.json.gz --nge ../NGE-fahrplan --out web/data`
 
+### Gleiszahlen `gleise.json`, Prüfliste `gueterabschnitte.csv`
+
+`tools/build_gleise.py` übernimmt die Gleiszahl je Abschnitt aus [VXstone/topo-daten](https://github.com/VXstone/topo-daten)
+(nur lesen; Regionstopologien `<region>_region_topologie.json` aus `spurplan/werkstatt/` und dem Ast `ergebnisse`).
+Betriebspunkte der Topologie werden über den Namen, sonst über die Lage (≤ 300 m nach Einpassung) den Stationen
+zugeordnet; je Stationspaar `ab["uicA-uicB"] = [min, max, Länge m, Region]`. Die Seite nimmt diese Zahl vor der
+Schätzung (teilweise eingleisig ⇒ eingleisig). Abschnitte ausserhalb der Regionen bleiben geschätzt.
+`gueterabschnitte.csv`: alle von Güterzügen befahrenen Abschnitte der Publikation mit Fahrten und ob topo-daten sie
+kennt – Prüfliste für topo-daten (fehlende Verbindungen, reine Güterabschnitte), hier keine Eingabe. Lokal:
+`python tools/build_gleise.py --topo <ordner> --fahrplan web/data/fahrplan.json.gz --pub web/data/publikation.json.gz --out web/data`
+
 ### Datenformat `fahrplan.json.gz`
 
 ```
@@ -64,7 +75,7 @@ Zeiten in Minuten ab Mitternacht (Folgetag > 1440), Station als Index in `st`.
 ## Was geschätzt ist
 
 - **Kilometer**: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten (geplant: Gleisgeometrie aus VXstone/topo-daten).
-- **Ein-/Zweigleisigkeit**: aus dem Fahrplan geschätzt (Begegnung auf der Strecke ⇒ zweigleisig, nur Kreuzungen in Bahnhöfen ⇒ vermutlich eingleisig); im Band über dem Diagramm von Hand änderbar.
+- **Ein-/Zweigleisigkeit**: aus topo-daten, wo eine Regionstopologie besteht (Band dunkel); sonst aus dem Fahrplan geschätzt (Begegnung auf der Strecke ⇒ zweigleisig, nur Kreuzungen in Bahnhöfen ⇒ vermutlich eingleisig; Band grau); im Band über dem Diagramm von Hand änderbar.
 - **Durchfahrtszeiten** ohne Angabe linear nach km.
 - **Durchbindungen** nach gleicher Zugnummer; **Wenden** (↺) sind Vermutungen (gleiche Linie, 3–45′).
 
@@ -82,3 +93,4 @@ Publikation/Güterzüge: aus den grafischen Fahrplänen, veröffentlicht von der
 auf [oev-info.ch](https://www.oev-info.ch/de/fahrplan-aktuell/grafische-fahrplaene), erstellt von SBB Infrastruktur
 (Fahrplan & Netzdesign) bzw. den jeweiligen Bahnen. **Die Lizenz bzw. die Nutzungsbedingungen für die Weiterverwendung sind
 ungeklärt**; die Daten sind automatisch ausgelesen und ohne Gewähr.
+Gleiszahlen: VXstone/topo-daten, Daten © OpenStreetMap-Mitwirkende, ODbL.

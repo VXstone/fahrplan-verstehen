@@ -3,3 +3,5 @@ __pycache__/
 lib/
 roh/
 web/data/gueterzuege.*
+web/data/gleise.json
+web/data/gueterabschnitte.csv
