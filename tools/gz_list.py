@@ -14,7 +14,8 @@ Ausgabe  <out>/gueterzuege.json, gueterzuege.csv, und gueterzuege.xlsx (nur wenn
 
 Regeln (wie in der Legende der Tabelle)
   - Güterzug = Kategorie G mit Nummer 4xxxx–6xxxx (optional ein Buchstabe, z. B. 67871F), bei der RhB jede
-    G-Linie. Zusatz «mod» = Variante für einen Teil des Jahres: Nummer ohne «mod», als zeitweise.
+    G-Linie, bei der MGB (Feld MGB, Stand Fahrplan 2025) jede G-Linie (42xx Visp–Zermatt, 6831 Oberalp).
+    Zusatz «mod» = Variante für einen Teil des Jahres: Nummer ohne «mod», als zeitweise.
   - Verkehrstage aus der VP; «+» und Abfahrt nach Mitternacht auf den Kalendertag der Abfahrt geschoben.
   - Teilstücke derselben Nummer mit gleichen Tagen, die ≤ 240′ nach dem Ende des vorigen beginnen, werden
     verkettet («Laufweg lückenhaft»). Danach Varianten derselben Nummer mit gleicher Relation und
@@ -22,7 +23,8 @@ Regeln (wie in der Legende der Tabelle)
   - Klasse: täglich / werktags (≥ 4 von Mo–Fr, ≤ 1 Wochenendtag) / Wochenende (nur Sa, So) /
     einzelne Tage (1–2 Tage) / teilweise (Rest).
   - Achse nach Fahrplanfeld (540/541/531 Gotthard, 351/352/391 Lötschberg, 222/223 Simplon) und nach
-    durchfahrenen Betriebspunkten (Gotthard, Luino, Chiasso); RhB-Felder → RhB; Pischahorn–Piz Fless →
+    durchfahrenen Betriebspunkten (Gotthard, Luino, Chiasso); RhB-Felder → RhB; Feld MGB → «MGB» (allein, damit
+    Göschenen/Oberalp nicht als Gotthard zählt); Pischahorn–Piz Fless →
     «Autoverlad Vereina».
 Quelle der PDFs: Systemaufgabe Kundeninformation (SKI), oev-info.ch – Lizenz ungeklärt.
 """
@@ -112,6 +114,8 @@ def hubs(stl):
 def achse(stl, felder, zug):
     t = " ".join(stl)
     f = set(felder)
+    if f == {"MGB"}:  # Meterspur: Göschenen/Andermatt sind hier nicht die Gotthard-Achse
+        return "MGB"
     if "Pischahorn" in t and "Piz Fless" in t and not re.fullmatch(r"5\d{3}", zug):  # RhB-Güterzüge G 5xxx nicht
         return "Autoverlad Vereina"
     a = []
@@ -141,7 +145,7 @@ def build(pub, fp, decode):
         mod = zug.endswith("mod")
         if mod:
             zug = zug[:-3]
-        if not (re.fullmatch(r"[4-6]\d{4}[A-Z]?", zug) or any(f.startswith("RhB") for f in felder)):
+        if not (re.fullmatch(r"[4-6]\d{4}[A-Z]?", zug) or any(f.startswith("RhB") or f == "MGB" for f in felder)):
             continue
         stl = [S[flat[k]][1] for k in range(0, len(flat), 4)]
         t0 = flat[2] if flat[2] is not None else flat[1]
