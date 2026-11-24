@@ -60,6 +60,37 @@ jobs:
           pip install --quiet openpyxl
           python tools/gz_list.py --pub web/data/publikation.json.gz --fahrplan web/data/fahrplan.json.gz \
             --nge lib/nge --out web/data
+      - name: topo-daten (nur lesen) – Regionstopologien
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: VXstone/topo-daten
+          path: lib/topo
+          sparse-checkout: spurplan/werkstatt
+      - name: topo-daten Ast ergebnisse (Regionen MOB, SZU, Vereina …)
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: VXstone/topo-daten
+          ref: ergebnisse
+          path: lib/topo-erg
+          sparse-checkout: ergebnisse
+      - name: Gleiszahlen aus topo-daten
+        continue-on-error: true
+        run: |
+          mkdir -p roh/topo
+          # je Region nur die Datei, deren Name zum Ordner passt (werkstatt/olten/olten_…, nicht Kopien anderer Regionen)
+          for f in lib/topo/spurplan/werkstatt/*/*_region_topologie.json lib/topo-erg/ergebnisse/region_*/*_region_topologie.json; do
+            [ -f "$f" ] || continue
+            d=$(basename "$(dirname "$f")"); d=${d#region_}
+            if [ "$(basename "$f")" = "${d}_region_topologie.json" ]; then cp "$f" roh/topo/; fi
+          done
+          ls roh/topo
+          printf '{"main":"%s","ergebnisse":"%s"}' "$(git -C lib/topo rev-parse --short HEAD)" "$(git -C lib/topo-erg rev-parse --short HEAD)" > roh/topo_stand.json
+          ARGS=""
+          if [ -s web/data/publikation.json.gz ]; then ARGS="--pub web/data/publikation.json.gz"; fi
+          python tools/build_gleise.py --topo roh/topo --fahrplan web/data/fahrplan.json.gz $ARGS \
+            --stand roh/topo_stand.json --out web/data
       - name: Release "daten" aktualisieren
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,7 +100,7 @@ jobs:
               --notes "Wird vom Workflow 'Daten und Seite' erzeugt. Siehe stand.json." --target "${{ github.sha }}"
           gh release upload daten web/data/fahrplan.json.gz web/data/stand.json --clobber
           if [ -s web/data/publikation.json.gz ]; then gh release upload daten web/data/publikation.json.gz --clobber; fi
-          for f in gueterzuege.json gueterzuege.csv gueterzuege.xlsx; do
+          for f in gueterzuege.json gueterzuege.csv gueterzuege.xlsx gleise.json gueterabschnitte.csv; do
             if [ -s web/data/$f ]; then gh release upload daten web/data/$f --clobber; fi
           done
           ls -la web/data

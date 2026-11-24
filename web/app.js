@@ -59,6 +59,16 @@ async function loadData() {
   T.forEach(t => { const k = t.fnr; if (!byFnr.has(k)) byFnr.set(k, []); byFnr.get(k).push(t); });
   D = { meta: raw.meta, S, T, byStation, byFnr, BF: raw.bf };
 }
+// Gleiszahlen je Abschnitt aus VXstone/topo-daten (tools/build_gleise.py): ab["uicA-uicB"] = [min, max, m, region]
+let GL = null;
+async function loadGleise() {
+  try { const r = await fetch("data/gleise.json"); if (r.ok) GL = await r.json(); } catch (e) { GL = null; }
+}
+function gleiseTopo(a, b) {
+  if (!GL) return null;
+  const ua = D.S[a].uic, ub = D.S[b].uic;
+  return GL.ab[ua < ub ? ua + "-" + ub : ub + "-" + ua] || null;
+}
 // ---------------- Publikation (grafische Fahrpläne SBB) ----------------
 // Kategorien: R Reisezug, G Güterzug, L Lok-/Leerfahrt. VP nach Zeichenerklärung SBB (1 = Mo … 7 = So).
 const PKAT = { R: "Reisezug (publ.)", G: "Güterzug (publ.)", L: "Lok/Leer (publ.)" };
@@ -427,12 +437,14 @@ function model() {
         const u0 = at(u, k, 1), u1 = at(u, k + 1, 0), w0 = at(w, k + 1, 1), w1 = at(w, k, 0);
         if (u0 < w1 && w0 < u1) { const f = (w1 - u0) / ((u1 - u0) + (w1 - w0) || 1);
           meets.push({ k: k + f, kk: k, up: u.id, dn: w.id, t: u0 + (u1 - u0) * f, line: true }); segMeet[k]++; break; } } } }
-  // Ein-/Zweigleisigkeit aus dem Fahrplan geschätzt: Begegnung auf der Strecke = zweigleisig
+  // Ein-/Zweigleisigkeit: von Hand > topo-daten > aus dem Fahrplan geschätzt (Begegnung auf der Strecke = zweigleisig)
   const single = segMeet.map((m, k) => {
     const key = ids[k] + "-" + ids[k + 1];
     if (state.single[key] != null) return { v: state.single[key], src: "manuell" };
-    if (m > 0) return { v: false, src: "Fahrplan: Begegnung auf der Strecke" };
-    if (segStation[k] >= 2) return { v: true, src: "Fahrplan: Kreuzungen nur in Bahnhöfen" };
+    const g = gleiseTopo(ids[k], ids[k + 1]);
+    if (g) return { v: g[0] === 1, topo: true, n: g, src: `topo-daten, Region ${g[3]}: ${g[0] === g[1] ? g[0] : g[0] + "–" + g[1]} Gleis${g[1] > 1 ? "e" : ""}${g[0] === 1 && g[1] > 1 ? ", teilweise eingleisig" : ""}` };
+    if (m > 0) return { v: false, src: "geschätzt – Fahrplan: Begegnung auf der Strecke" };
+    if (segStation[k] >= 2) return { v: true, src: "geschätzt – Fahrplan: Kreuzungen nur in Bahnhöfen" };
     return { v: null, src: "unbekannt" };
   });
   meets.forEach(m => { const k = m.line ? m.kk : m.k; m.single = m.line ? single[m.kk].v === true : ((k > 0 && single[k - 1].v === true) || (k < single.length && single[k] && single[k].v === true)); });
@@ -505,7 +517,7 @@ const shortName = n => n.replace(/ - .*$/, "").replace(/ \(.*\)$/, "");
 function drawBF(scroll) {
   const host = $("bf"); host.innerHTML = "";
   const bh = h("div", null); bh.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:22px 0 6px";
-  bh.appendChild(h("h2", "Bildfahrplan <span style='font-weight:400;color:var(--text-muted);font-size:12px'>Strecke waagrecht nach km, Zeit nach unten · Band oben: ═ zweigleisig, ─ eingleisig, ┄ unbekannt (antippen zum Ändern)</span>")).style.margin = "0";
+  bh.appendChild(h("h2", "Bildfahrplan <span style='font-weight:400;color:var(--text-muted);font-size:12px'>Strecke waagrecht nach km, Zeit nach unten · Band oben: ═ zweigleisig, ─ eingleisig (dunkel: topo-daten, grau: aus dem Fahrplan geschätzt), ┄ unbekannt (antippen zum Ändern)</span>")).style.margin = "0";
   const pv = h("button", "🖨 Ausschnitt drucken / PDF", "chip"); pv.onclick = () => printBF("view"); bh.appendChild(pv);
   const pd = h("button", "🖨 ganzer Tag als PDF", "chip"); pd.title = "mehrere Seiten A4 quer; mit Zeitmassstab 2× oder 4× werden es mehr Seiten mit mehr Platz"; pd.onclick = () => printBF("day"); bh.appendChild(pd);
   host.appendChild(bh);
@@ -525,8 +537,9 @@ function drawBF(scroll) {
   // Gleisband
   C.single.forEach((sg, k) => {
     const x1 = X(C.km[k]), x2 = X(C.km[k + 1]), g = el("g", { class: "seg" }, hs);
-    if (sg.v === true) el("line", { x1, x2, y1: HT - 8, y2: HT - 8, stroke: "var(--text-secondary)", "stroke-width": 1.5 }, g);
-    else if (sg.v === false) { el("line", { x1, x2, y1: HT - 10, y2: HT - 10, stroke: "var(--text-secondary)", "stroke-width": 1.5 }, g); el("line", { x1, x2, y1: HT - 6, y2: HT - 6, stroke: "var(--text-secondary)", "stroke-width": 1.5 }, g); }
+    const sc = sg.topo || sg.src === "manuell" ? "var(--text-primary)" : "var(--text-secondary)";
+    if (sg.v === true) el("line", { x1, x2, y1: HT - 8, y2: HT - 8, stroke: sc, "stroke-width": 1.5 }, g);
+    else if (sg.v === false) { el("line", { x1, x2, y1: HT - 10, y2: HT - 10, stroke: sc, "stroke-width": 1.5 }, g); el("line", { x1, x2, y1: HT - 6, y2: HT - 6, stroke: sc, "stroke-width": 1.5 }, g); }
     else el("line", { x1, x2, y1: HT - 8, y2: HT - 8, stroke: "var(--text-muted)", "stroke-width": 1.5, "stroke-dasharray": "2 3" }, g);
     el("rect", { x: x1, y: HT - 16, width: Math.max(2, x2 - x1), height: 16, fill: "transparent" }, g);
     el("title", {}, g).textContent = `${C.stations[k]} – ${C.stations[k + 1]}: ${sg.v === true ? "eingleisig" : sg.v === false ? "zweigleisig" : "unbekannt"} (${sg.src}) – antippen zum Ändern`;
@@ -735,7 +748,7 @@ function drawKB(target, printCols) {
 // ---------------- Druck / PDF ----------------
 function printHeader(what) {
   const d = state.date, wd = WD[new Date(d + "T12:00:00").getDay()];
-  return h("div", `<div class="druckkopf"><b>${esc(what)} · ${esc(D.S[state.a].name)} → ${esc(D.S[state.b].name)}${state.via != null ? " über " + esc(D.S[state.via].name) : ""}</b> · ${wd} ${dateDE(d)}<br><span>Quelle: HRDF (opentransportdata.swiss), Stand ${esc(D.meta.erzeugt)} · Kilometer Luftlinie, Gleiszahl aus Fahrplan geschätzt · vxstone.github.io/fahrplan-verstehen</span></div>`);
+  return h("div", `<div class="druckkopf"><b>${esc(what)} · ${esc(D.S[state.a].name)} → ${esc(D.S[state.b].name)}${state.via != null ? " über " + esc(D.S[state.via].name) : ""}</b> · ${wd} ${dateDE(d)}<br><span>Quelle: HRDF (opentransportdata.swiss), Stand ${esc(D.meta.erzeugt)} · Kilometer Luftlinie, Gleiszahl aus topo-daten (OSM) oder aus Fahrplan geschätzt · vxstone.github.io/fahrplan-verstehen</span></div>`);
 }
 function doPrint(node) {
   let P = $("druck"); if (P) P.remove();
@@ -790,7 +803,7 @@ function drawKR() {
     const ort = m.line ? `zwischen ${esc(C.stations[m.kk])} und ${esc(C.stations[m.kk + 1])} ✕` : esc(C.stations[m.k]);
     html += `<tr><td>${fmt(m.t)}</td><td>${ort}</td><td>${esc(u.name)}</td><td class="${m.line ? "" : cls(m.buf_up)}">${m.line ? "–" : Math.round(m.buf_up) + "′"}</td><td>${esc(d.name)}</td><td class="${m.line ? "" : cls(m.buf_dn)}">${m.line ? "–" : Math.round(m.buf_dn) + "′"}</td></tr>`; }
   host.appendChild(h("div", html + "</table></div>"));
-  host.appendChild(h("p", "Puffer = Minuten, die der Gegenzug verspätet ankommen darf, bevor dieser Zug warten muss. ≤2′ rot, ≤5′ gelb. Ein-/Zweigleisigkeit aus dem Fahrplan geschätzt (Begegnung auf der Strecke ⇒ zweigleisig; nur Kreuzungen in Bahnhöfen ⇒ vermutlich eingleisig) oder von Hand gesetzt.", "note"));
+  host.appendChild(h("p", "Puffer = Minuten, die der Gegenzug verspätet ankommen darf, bevor dieser Zug warten muss. ≤2′ rot, ≤5′ gelb. Ein-/Zweigleisigkeit aus VXstone/topo-daten (Regionstopologie aus OpenStreetMap, wo vorhanden; teilweise eingleisig zählt als eingleisig), sonst aus dem Fahrplan geschätzt (Begegnung auf der Strecke ⇒ zweigleisig; nur Kreuzungen in Bahnhöfen ⇒ vermutlich eingleisig) oder von Hand gesetzt.", "note"));
 }
 
 // ---------------- Anschlüsse ----------------
@@ -992,7 +1005,7 @@ function setDate(d) {
 }
 
 (async function init() {
-  try { await loadData(); } catch (e) { $("sub").textContent = "Fehler beim Laden: " + e.message; return; }
+  try { await Promise.all([loadData(), loadGleise()]); } catch (e) { $("sub").textContent = "Fehler beim Laden: " + e.message; return; }
   buildNames();
   const m = D.meta;
   $("sub").innerHTML = `Bildfahrplan, Kursbuch, Kreuzungen, Knotenlupe und Anschlüsse für eine frei gewählte Strecke · Fahrplan ${dateDE(m.start)}–${dateDE(m.end)} (HRDF, opentransportdata.swiss) · Stand ${esc(m.erzeugt)}`;
@@ -1005,7 +1018,7 @@ function setDate(d) {
   $("dHeute").onclick = () => setDate(new Date().toISOString().slice(0, 10));
   document.querySelectorAll("#quelle button").forEach(b => b.onclick = () => setQuelle(b.dataset.q));
   $("zugform").addEventListener("submit", e => { e.preventDefault(); const v = $("inZ").value.trim(); if (v) showZug(v, PUB || state.quelle !== "tag" ? "pub" : "pub"); });
-  $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen. «Publikation», «Vergleich» und Güterzüge: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt.";
+  $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Gleiszahlen je Abschnitt aus VXstone/topo-daten (Regionen " + (GL ? Object.keys(GL.meta.regionen).join(", ") : "–") + "; Daten © OpenStreetMap-Mitwirkende, ODbL), übrige Abschnitte aus Begegnungen geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen. «Publikation», «Vergleich» und Güterzüge: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt.";
   const p = new URLSearchParams(location.search);
   let d = p.get("datum") || new Date().toISOString().slice(0, 10);
   if (d < m.start || d > m.end) d = m.start > d ? m.start : m.end;
