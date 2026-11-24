@@ -189,19 +189,98 @@ def unwrap(pts):
     return out
 
 
+def merge(g, stat):
+    """Punkte der Stücke einer Gruppe zu einem Lauf vereinigen. Wo sich Fahrplanfelder überlappen,
+    steht derselbe Betriebspunkt in mehreren Stücken (Schritt F):
+      gleiche Zeit (±2,5′)          → ein Punkt
+      Feldwechsel mit Halt          → Stück A endet mit der Ankunft, Stück B beginnt mit der Abfahrt
+                                      (Lücke ≤ 60′) → ein Punkt mit An/Ab
+      Widerspruch zwischen Feldern  → Punkt des Felds mit den meisten übereinstimmenden Feldern,
+                                      bei Gleichstand des Stücks, das den Überlappungsbereich weiter
+                                      innen hat (am Feldrand sind Linien oft abgeschnitten/falsch zugeordnet)
+    Doppelte Punkte innerhalb eines Felds (echtes Wiederkehren, gleiche Nummer mit anderer Lage) bleiben."""
+    obs = []
+    for n, pc in enumerate(g):
+        L = len(pc["pts"])
+        for i, (s, an, ab) in enumerate(pc["pts"]):
+            obs.append(dict(s=s, an=an, ab=ab, fe=pc["feld"], pc=n, rand=min(i, L - 1 - i), L=L,
+                            erst=i == 0, letzt=i == L - 1))
+    # je Betriebspunkt nach Zeit gruppieren
+    halts = defaultdict(list)
+    for o in sorted(obs, key=lambda o: o["an"]):
+        hl = halts[o["s"]]
+        h = next((h for h in hl if any(cd(o["an"], x["an"]) < 2.5 for x in h)), None)
+        (h.append(o) if h is not None else hl.append([o]))
+    # Feldwechsel mit Halt: Ankunft (Stückende) + Abfahrt (Stückanfang) zusammenlegen
+    for s, hl in halts.items():
+        changed = True
+        while changed and len(hl) > 1:
+            changed = False
+            for h1 in hl:
+                for h2 in hl:
+                    if h1 is h2 or {x["pc"] for x in h1} & {x["pc"] for x in h2}:
+                        continue
+                    gap = (min(x["an"] for x in h2) - max(x["ab"] for x in h1)) % 1440
+                    if (any(x["letzt"] for x in h1) and any(x["erst"] for x in h2)
+                            and not any(x["erst"] for x in h1) and not any(x["letzt"] for x in h2)
+                            and 0 < gap <= 60):
+                        for x in h2:
+                            x["ist_ab"] = True
+                        h1 += h2
+                        hl.remove(h2)
+                        stat["feldwechsel"] += 1
+                        changed = True
+                        break
+                if changed:
+                    break
+    # Widersprüche zwischen Feldern
+    konf = {s: hl for s, hl in halts.items() if len(hl) > 1}
+    tiefe = defaultdict(int)  # je Stück: wie weit innen liegen seine Punkte im Überlappungsbereich
+    for hl in halts.values():
+        if len({x["fe"] for h in hl for x in h}) > 1:
+            for h in hl:
+                for x in h:
+                    tiefe[x["pc"]] += x["rand"]
+    for s, hl in konf.items():
+        fs = [{x["fe"] for x in h} for h in hl]
+        sc = lambda k: (len(fs[k]), max(tiefe[x["pc"]] for x in hl[k]), max(x["L"] for x in hl[k]))  # noqa: E731
+        keep = []
+        for i, h in enumerate(hl):
+            # nur gegen Gruppen aus anderen Feldern antreten; gleiches Feld → beide behalten
+            rivalen = [j for j in range(len(hl)) if j != i and not fs[i] & fs[j]]
+            if all(sc(i) > sc(j) or (sc(i) == sc(j) and i < j) for j in rivalen):
+                keep.append(h)
+            else:
+                stat["verworfen_punkte"] += 1
+        halts[s] = keep
+    pts = []
+    for s, hl in halts.items():
+        for h in hl:
+            # Ankunft nicht von Stückanfängen, Abfahrt nicht von Stückenden (am Feldrand oft abgeschnitten)
+            ans = [x for x in h if not x["erst"] and not x.get("ist_ab")] or h
+            abs_ = [x for x in h if not x["letzt"]] or h
+            pts.append((s, waehle(ans, "an", tiefe, stat), waehle(abs_, "ab", tiefe, stat)))
+    return pts
+
+
+def waehle(xs, k, tiefe, stat):
+    """Zeit k aus mehreren Beobachtungen: stimmen sie (±2,5′) überein, die früheste Ankunft bzw. späteste
+    Abfahrt; sonst die Zeit, die die meisten Felder zeigen, bei Gleichstand die des Stücks, das weiter innen liegt."""
+    ts = [x[k] for x in xs]
+    if all(cd(t, ts[0]) <= 2.5 for t in ts):
+        return min(ts, key=lambda t: (t - ts[0] + 720) % 1440) if k == "an" else max(ts, key=lambda t: (t - ts[0] + 720) % 1440)
+    stat[f"widerspruch_{k}"] += 1
+    best = max(xs, key=lambda x: (len({y["fe"] for y in xs if cd(y[k], x[k]) <= 2.5}), tiefe[x["pc"]], x["L"]))
+    return best[k]
+
+
 tr = []
+mstat = defaultdict(int)
 for (kat, zug), pieces in P.items():
     good = [pc for pc in pieces if plausibel(kat, zug, pc["pts"])]
     verworfen[kat] += len(pieces) - len(good)
     for g in join_clusters(cluster(good)):
-        pts = []
-        for s, an, ab in sorted([x for pc in g for x in pc["pts"]], key=lambda x: x[1]):
-            j = next((k for k, q in enumerate(pts) if q[0] == s and cd(an, q[1]) < 2.5), None)
-            if j is None:
-                pts.append((s, an, ab))
-            else:
-                q = pts[j]
-                pts[j] = (s, q[1] if cd(q[1], an) < 0.01 else min(q[1], an), max(q[2], ab))
+        pts = merge(g, mstat)
         if len(pts) < 2:
             continue
         pts = unwrap(pts)
@@ -224,7 +303,7 @@ for (kat, zug), pieces in P.items():
 meta = dict(quelle=pub.get("quelle", "grafische Fahrpläne SBB"), felder=len(pub["felder"]),
             zuege={k: sum(1 for t in tr if t[1] == k) for k in "RGL"},
             erzeugt=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-            verworfen=dict(verworfen), fehlende_kuerzel=dict(sorted(fehlend.items(), key=lambda x: -x[1])[:40]))
+            verworfen=dict(verworfen), ueberlappung=dict(mstat), fehlende_kuerzel=dict(sorted(fehlend.items(), key=lambda x: -x[1])[:40]))
 with gzip.open(f"{a.out}/publikation.json.gz", "wt", encoding="utf-8", compresslevel=9) as f:
     json.dump(dict(meta=meta, st_add=st_add, tr=tr), f, ensure_ascii=False, separators=(",", ":"))
 print(json.dumps(meta, ensure_ascii=False, indent=1))

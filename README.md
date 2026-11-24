@@ -34,7 +34,10 @@ Der Workflow `Daten und Seite` (mittwochs und samstags, auf Knopfdruck und bei j
 `tools/build_pub.py` nimmt die aus den grafischen Fahrplänen ausgelesenen Züge
 (Release `grafapla-<Jahr>` von VXstone/NGE-fahrplan, Datei `grafapla_<Jahr>_zuege.json.gz`),
 verbindet die Stücke je Zugnummer über die Fahrplanfelder und verwirft Reisezug-Stücke, deren Nummer
-laut HRDF anderswo fährt (Fehllesungen). Format: `{meta, st_add, tr: [[zugnr, kat R|G|L, felder, vp, [station, an, ab, durchfahrt, …]]]}`;
+laut HRDF anderswo fährt (Fehllesungen). Wo sich Felder überlappen, wird jeder Betriebspunkt nur einmal
+übernommen: gleiche Zeiten zusammengelegt, Ankunft (Stückende) + Abfahrt (Stückanfang) zu einem Halt,
+bei Widerspruch gilt die Zeit, die die meisten Felder zeigen, sonst die des Stücks, das weiter innen liegt
+(`meta.ueberlappung` zählt das). Format: `{meta, st_add, tr: [[zugnr, kat R|G|L, felder, vp, [station, an, ab, durchfahrt, …]]]}`;
 `st_add` wird an `st` angehängt. Verkehrsperioden nach der Zeichenerklärung der SBB (`15` = Mo–Fr, `269` = Werktage Di–Sa,
 `+` = Folgetag, `*` = zeitweise); eidg. Feiertage zählen als Sonntag.
 
