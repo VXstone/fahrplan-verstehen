@@ -68,7 +68,7 @@ kennt – Prüfliste für topo-daten (fehlende Verbindungen, reine Güterabschni
   "st": [[uic, name, lat, lon, kürzel], …],
   "bf": {bitfeldnummer: hex, …},                 // Verkehrstage; Bit i = Tag (i - offset) ab start
   "tr": [[fnr, verwaltung, gattung, linie, bitfeld, [station, an, ab, durchfahrt, …]], …],
-  "dw"/"dws"/"dwf": [[u, v, [zwischenpunkte], [zeitanteile 0..1]], …],   // vermutete Durchfahrten (tools/durchfahrt.py)
+  "dw"/"dws"/"dwx"/"dwf": [[u, v, [zwischenpunkte], [zeitanteile 0..1]], …],   // vermutete Durchfahrten (tools/durchfahrt.py)
   "schmal": [fahrtindex, …], "nur_schmal"/"nur_normal": [station, …] }
 ```
 
@@ -89,7 +89,11 @@ Zeiten in Minuten ab Mitternacht (Folgetag > 1440), Station als Index in `st`.
   und `nur_schmal`/`nur_normal` (Betriebspunkte); die Seite fügt die Punkte beim Laden ein (im Zugfeld mit ~).
   Ein im Netz geprüfter Abschnitt ohne Zwischenpunkt heisst: der Zug fährt an keinem anderen Bahnhof vorbei – er wird nicht auf eine
   Strecke gelegt, die dazwischen Bahnhöfe desselben Netzes hat (Rothrist–Olten durch den Born, nicht über Aarburg-Oftringen).
-  Grenzen: wo zwei Wege ähnlich schnell sind (Zürich–Winterthur), entscheidet maxspeed aus OSM; Betriebspunkte, an denen ein
+  Spurweite je Fahrt nach den Abschnitten, die nur in einem Netz liegen (AsM Langenthal–St. Urban neben der Neubaustrecke),
+  Betriebspunkte gehören zu den Netzen der Fahrten, die sie führen.
+  Fernverkehr (IC, IR, EC, ICE …, Tabelle `dwx`): Bahnhöfe, die keine 10 Fernverkehrsfahrten führen, kosten 4 Minuten Zuschlag –
+  ein IC ohne Halt Zürich HB–Winterthur fährt über Oerlikon–Wallisellen, nicht über Stadelhofen–Stettbach.
+  Grenzen: wo zwei Wege ähnlich schnell sind, entscheidet maxspeed aus OSM; Betriebspunkte, an denen ein
   parallel geführtes Gleis eines anderen Netzes vorbeiführt, können fälschlich als Durchfahrt erscheinen.
 - **Strecke**: Folgen mit Zickzack (S1 früh Bern–Wankdorf–Zollikofen–Ostermundigen) werden nicht zur Basis der Strecke, sondern als «über …» angeboten.
 - **Durchbindungen** nach gleicher Zugnummer; **Wenden** (↺) sind Vermutungen (gleiche Linie, 3–45′).

@@ -17,6 +17,7 @@ FANG_KM = 0.35      # Bahnhof → nächster Gleisknoten
 SICHER_KM = 0.035   # Betriebspunkt liegt sicher am Weg: Abstand Weg–Gleis (+ Abstand Bahnhofskoordinate–Gleis)
 NAH_KM = 0.12       # bis hier nur, wenn der Fahrplan den Punkt mit dem Nachbarpunkt verbindet
                     # (Frutigen am Basistunnel ja, Roggwil-Wynau neben der Neubaustrecke nein)
+STRAFE_MIN = 4.0    # Zuschlag je Bahnhof ohne Fernverkehr auf dem Weg eines Fernverkehrszugs
 UMWEG = 1.6         # Weg höchstens so lang wie Luftlinie × UMWEG + 3 km
 
 
@@ -114,8 +115,15 @@ class Netz:
                         best, bd = n, dd
         return best
 
-    def weg(self, a, b, maxkm):
-        """Schnellster Weg a→b (Knotenliste) innerhalb einer Ellipse; None wenn keiner."""
+    def knoten_um(self, lat, lon, r):
+        """Gleisknoten im Umkreis r km."""
+        gi, gj = int(lat * 100), int(lon * 100)
+        return [n for i in (gi - 1, gi, gi + 1) for j in (gj - 1, gj, gj + 1)
+                for n in self.grid.get((i, j), ()) if _km((lat, lon), self.pos[n]) <= r]
+
+    def weg(self, a, b, maxkm, strafe=None):
+        """Schnellster Weg a→b (Knotenliste) innerhalb einer Ellipse; None wenn keiner.
+        strafe: Knoten, deren Betreten (von aussen) STRAFE_MIN kostet (Bahnhöfe, an denen der Fernverkehr nie vorbeikommt)."""
         pb = self.pos[b]
         pa = self.pos[a]
         dist, prev, pq = {a: 0.0}, {}, [(0.0, a)]
@@ -130,6 +138,8 @@ class Netz:
                 if _km(pa, py) + _km(py, pb) > maxkm:
                     continue
                 nd = du + w
+                if strafe and y in strafe and x not in strafe:
+                    nd += STRAFE_MIN
                 if nd < dist.get(y, 1e18):
                     dist[y], prev[y] = nd, x
                     heapq.heappush(pq, (nd, y))
@@ -141,10 +151,11 @@ class Netz:
         return p[::-1]
 
 
-def wege(S, paare, N, kandidaten, kanten=frozenset()):
+def wege(S, paare, N, kandidaten, kanten=frozenset(), strafe_bf=()):
     """S: Stationen [[uic, name, lat, lon, abk], …]; paare: Iterable (u, v) mit u < v; N: Netz;
     kandidaten: Stationsindizes, die als Zwischenpunkt in Frage kommen (keine virtuellen Punkte);
-    kanten: Paare (u < v), die im Fahrplan direkt aufeinander folgen.
+    kanten: Paare (u < v), die im Fahrplan direkt aufeinander folgen;
+    strafe_bf: Betriebspunkte, deren Durchfahren STRAFE_MIN kostet (für Wege des Fernverkehrs).
     Gibt {(u, v): ([Zwischenpunkte], [Zeitanteile])} für Paare mit mindestens einem Zwischenpunkt
     und set() der Paare, die im Netz gefunden wurden (auch ohne Zwischenpunkt) zurück."""
     knoten = {}
@@ -153,6 +164,12 @@ def wege(S, paare, N, kandidaten, kanten=frozenset()):
             n = N.naechster(S[s][2], S[s][3])
             if n is not None:
                 knoten[s] = n
+    strafe = set()
+    for s in strafe_bf:
+        if S[s][2] is not None:
+            n = N.naechster(S[s][2], S[s][3])
+            if n is not None:
+                strafe.update(N.knoten_um(S[s][2], S[s][3], _km((S[s][2], S[s][3]), N.pos[n]) + 0.06))
     # Abstand Bahnhofskoordinate–Gleis (wird zur Toleranz «liegt am Weg» addiert)
     versatz = {s: _km((S[s][2], S[s][3]), N.pos[n]) for s, n in knoten.items()}
     # Kandidaten im Gitter (für «liegt am Weg»)
@@ -165,7 +182,7 @@ def wege(S, paare, N, kandidaten, kanten=frozenset()):
         if u not in knoten or v not in knoten:
             continue
         luft = _km((S[u][2], S[u][3]), (S[v][2], S[v][3]))
-        p = N.weg(knoten[u], knoten[v], luft * UMWEG + 3)
+        p = N.weg(knoten[u], knoten[v], luft * UMWEG + 3, strafe)
         if not p:
             continue
         gefunden.add((u, v))

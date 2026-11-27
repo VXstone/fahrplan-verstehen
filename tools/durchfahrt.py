@@ -26,7 +26,8 @@ import gzip
 import heapq
 import json
 import math
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 
 ZUSAMMEN_FAKTOR, ZUSAMMEN_KM = 1.2, 1.0
 WEG_FAKTOR, WEG_KM = 1.35, 2.0
@@ -151,6 +152,14 @@ def paare(S, trips):
     return out
 
 
+FERNVERKEHR = re.compile(r"^(IC|ICN|ICE|IR|IRE|EC|EN|NJ|RJ|RJX|TGV|EXT|PE)$")
+
+
+def fernverkehr(gattung):
+    """Gattung des Fernverkehrs (dieselbe Regel steht in web/app.js)."""
+    return bool(FERNVERKEHR.match(gattung or ""))
+
+
 def gesamt(S, trips, netz=None, log=print):
     """Wege für alle Paare, getrennt nach Spurweite: {"N": {…}, "S": {…}, "F": {…}} mit (u, v) → (inner, ant), u < v.
     N/S: im Gleisnetz von topo-daten (netz = Pfad zu schweiz_bahn.json.gz), Normal- bzw. Schmalspur;
@@ -158,7 +167,7 @@ def gesamt(S, trips, netz=None, log=print):
     «nur»: Betriebspunkte nur am Normal- bzw. nur am Schmalspurnetz. Dazu die Menge der Schmalspur-Fahrten (Index in trips)."""
     fp = {(u, v): w for (u, v), w in wege(S, trips).items() if u < v}
     if not netz:
-        return {"N": {}, "S": {}, "F": fp}, set()
+        return {"N": {}, "S": {}, "X": {}, "F": fp}, set()
     import os
     import sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -184,12 +193,19 @@ def gesamt(S, trips, netz=None, log=print):
             zu["N"].add(s)
         if ds is not None and (dn is None or ds <= dn + 0.005):
             zu["S"].add(s)
-    # Spurweite je Fahrt: mehr Punkte nur am Schmalspurnetz als nur am Normalspurnetz → Schmalspur
+    # Spurweite je Fahrt: welche ihrer Abschnitte liegen nur im Normal-, welche nur im Schmalspurnetz?
+    # (AsM Langenthal–St. Urban neben der Neubaustrecke: nach Lage nicht zu trennen, nach Abschnitten schon)
+    g0 = {art: topo_wege.wege(S, P, N, (), kanten)[1] for art, N in netze.items()}
     schmal = set()
     for i, t in enumerate(trips):
-        st = t[5][0::4]
-        n = sum(1 for s in st if s in zu["N"] and s not in zu["S"])
-        m = sum(1 for s in st if s in zu["S"] and s not in zu["N"])
+        f = t[5]
+        ks = [(min(f[j], f[j + 4]), max(f[j], f[j + 4])) for j in range(0, len(f) - 4, 4)]
+        n = sum(1 for k in ks if k in g0["N"] and k not in g0["S"])
+        m = sum(1 for k in ks if k in g0["S"] and k not in g0["N"])
+        if m == n:   # unentschieden: nach Lage der Punkte
+            st = f[0::4]
+            n = sum(1 for s in st if s in zu["N"] and s not in zu["S"])
+            m = sum(1 for s in st if s in zu["S"] and s not in zu["N"])
         if m > n:
             schmal.add(i)
     # Netz je Betriebspunkt endgültig: die Fahrten, die ihn führen (Chur: beide; Chur Wiesental, Untervaz-Trimmis: RhB)
@@ -207,6 +223,20 @@ def gesamt(S, trips, netz=None, log=print):
             W.setdefault(k, ([], []))
         out[art] = W
         gefunden |= g
+    # Fernverkehr (Normalspur): Bahnhöfe, die kein Fernverkehrszug führt, kosten einen Zuschlag – ein IC ohne Halt
+    # Zürich HB–Winterthur fährt über Oerlikon, nicht über Stadelhofen–Stettbach (dort halten alle).
+    # Nur die Paare, deren Weg sich dadurch ändert, kommen in die Tabelle «F».
+    # «führt Fernverkehr» = mindestens 10 Fahrten (ohne Extrazüge EXT, die fast überall einmal vorbeikommen)
+    fvz = Counter(s for i, t in enumerate(trips) if i not in schmal and fernverkehr(t[2]) and t[2] != "EXT"
+                  for s in set(t[5][0::4]))
+    fv = {s for s, n in fvz.items() if n >= 10}
+    PF = {k for i, t in enumerate(trips) if i not in schmal and fernverkehr(t[2])
+          for f in (t[5],) for j in range(0, len(f) - 4, 4) for k in [(min(f[j], f[j + 4]), max(f[j], f[j + 4]))] if k in P}
+    WF, gF = topo_wege.wege(S, PF, netze["N"], zu["N"], kanten, strafe_bf=zu["N"] - fv)
+    for k in gF:
+        WF.setdefault(k, ([], []))
+    out["X"] = {k: w for k, w in WF.items() if out["N"].get(k, ([], []))[0] != w[0]}
+    log(f"Fernverkehr: {len(PF)} Paare, {len(out['X'])} mit anderem Weg")
     out["F"] = {k: w for k, w in fp.items() if k not in gefunden}
     log(f"Schmalspur-Fahrten: {len(schmal)}, Fahrplangraph für {len(out['F'])} Paare")
     out["nur"] = {"N": sorted(zu["N"] - zu["S"]), "S": sorted(zu["S"] - zu["N"])}
@@ -225,7 +255,7 @@ def tabelle(S, trips, netz=None, log=print):
     sonst dwf, und fügt die Punkte beim Laden ein (beide Richtungen)."""
     W, schmal = gesamt(S, trips, netz, log)
     nur = W.pop("nur", {})
-    return {"dw": _liste(W["N"]), "dws": _liste(W["S"]), "dwf": _liste(W["F"]), "schmal": sorted(schmal),
+    return {"dw": _liste(W["N"]), "dws": _liste(W["S"]), "dwx": _liste(W["X"]), "dwf": _liste(W["F"]), "schmal": sorted(schmal),
             "nur_schmal": nur.get("S", []), "nur_normal": nur.get("N", [])}
 
 
@@ -234,14 +264,16 @@ def ergaenzen(S, trips, W, schmal=frozenset()):
     Gibt (Fahrten geändert, Punkte eingefügt) zurück."""
     WW = {}
     for art, w in W.items():
-        if art != "F":
+        if art == "X":
+            w = {**W["F"], **W["N"], **w}
+        elif art != "F":
             w = {**W["F"], **w}
         d = dict(w)
         d.update({(v, u): (inner[::-1], [1 - a for a in ant[::-1]]) for (u, v), (inner, ant) in w.items()})
         WW[art] = d
     n_t = n_p = 0
     for ti, t in enumerate(trips):
-        Wt = WW["S" if ti in schmal else "N"]
+        Wt = WW["S" if ti in schmal else "X" if fernverkehr(t[2]) else "N"]
         f = t[5]
         neu, geaendert = f[:4], False
         for i in range(0, len(f) - 4, 4):
@@ -288,7 +320,7 @@ if __name__ == "__main__":
             inner = w[0] if u < v else w[0][::-1]
             print(art, von, "→", nach, ":", " – ".join(S[x][1] for x in inner))
     if a.out:   # Originalfahrten + Wegtabellen, wie build_data.py sie schreibt
-        d.update({"dw": _liste(W["N"]), "dws": _liste(W["S"]), "dwf": _liste(W["F"]), "schmal": sorted(schmal),
+        d.update({"dw": _liste(W["N"]), "dws": _liste(W["S"]), "dwx": _liste(W["X"]), "dwf": _liste(W["F"]), "schmal": sorted(schmal),
                   "nur_schmal": nur.get("S", []), "nur_normal": nur.get("N", [])})
         with gzip.open(a.out, "wt", encoding="utf-8", compresslevel=9) as fh:
             json.dump(d, fh, ensure_ascii=False, separators=(",", ":"))

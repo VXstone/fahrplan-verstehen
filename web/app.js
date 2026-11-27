@@ -51,12 +51,14 @@ async function loadData() {
   // dw Normalspurnetz, dws Schmalspurnetz (topo-daten), dwf Fahrplangraph für Paare ausserhalb beider Netze
   const mkDW = list => { const m = new Map(); (list || []).forEach(([u, v, inner, ant]) => {
     m.set(u + "-" + v, [inner, ant]); m.set(v + "-" + u, [inner.slice().reverse(), ant.slice().reverse().map(a => 1 - a)]); }); return m; };
-  const DWN = mkDW(raw.dw), DWS = mkDW(raw.dws), DWF = mkDW(raw.dwf), SCHMAL = new Set(raw.schmal || []);
+  const DWN = mkDW(raw.dw), DWS = mkDW(raw.dws), DWX = mkDW(raw.dwx), DWF = mkDW(raw.dwf), SCHMAL = new Set(raw.schmal || []);
   const NUR = { S: new Set(raw.nur_schmal || []), N: new Set(raw.nur_normal || []) };   // Betriebspunkte nur an einem Spurweiten-Netz
   let nVerm = 0;
   const T = raw.tr.map(([fnr, admin, cat, line, bf, flat], i) => {
     const st = [], arr = [], dep = [], pass = [], vm = [], gp = [];   // gp[j]: Abschnitt j→j+1 im Gleisnetz geprüft
-    const DW = SCHMAL.has(i) ? DWS : DWN;
+    // Fernverkehr: eigener Weg, wo Bahnhöfe ohne Fernverkehr dazwischen lägen (dwx, gleiche Regel wie tools/durchfahrt.py)
+    const fv = /^(IC|ICN|ICE|IR|IRE|EC|EN|NJ|RJ|RJX|TGV|EXT|PE)$/.test(cat || "");
+    const DW = SCHMAL.has(i) ? DWS : fv ? { get: k => DWX.get(k) || DWN.get(k) } : DWN;
     for (let k = 0; k < flat.length; k += 4) {
       if (k > 0) {   // vermutete Durchfahrten einfügen
         const key = flat[k - 4] + "-" + flat[k], wn = DW.get(key), w = wn || DWF.get(key);
@@ -77,7 +79,7 @@ async function loadData() {
   // Bitfelder als Bytes vorbereiten
   const byFnr = new Map();
   T.forEach(t => { const k = t.fnr; if (!byFnr.has(k)) byFnr.set(k, []); byFnr.get(k).push(t); });
-  D = { meta: raw.meta, S, T, byStation, byFnr, BF: raw.bf, NUR, nVerm, nDW: [raw.dw, raw.dws, raw.dwf].reduce((n, l) => n + (l || []).length, 0) };
+  D = { meta: raw.meta, S, T, byStation, byFnr, BF: raw.bf, NUR, nVerm, nDW: [raw.dw, raw.dws, raw.dwx, raw.dwf].reduce((n, l) => n + (l || []).length, 0) };
 }
 // Gleiszahlen je Abschnitt aus VXstone/topo-daten (tools/build_gleise.py): ab["uicA-uicB"] = [min, max, m, region]
 let GL = null;
