@@ -85,7 +85,11 @@ meta = {
     "lauf": f"{os.environ.get('GITHUB_SERVER_URL', '')}/{os.environ.get('GITHUB_REPOSITORY', '')}"
             f"/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
 }
-data = {"meta": meta, "st": used, "bf": bf_used, "tr": trips}
+# Wege für Züge ohne Zwischenpunkte (vermutete Durchfahrten, siehe tools/durchfahrt.py)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import durchfahrt  # noqa: E402
+dw = durchfahrt.tabelle(used, trips)
+data = {"meta": meta, "st": used, "bf": bf_used, "tr": trips, "dw": dw}
 target = out / "fahrplan.json.gz"
 with gzip.open(target, "wt", encoding="utf-8", compresslevel=9) as f:
     json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
@@ -102,7 +106,7 @@ def runs(bfid, day):
 
 
 mon = ref - dt.timedelta(days=ref.weekday())
-stand = dict(meta, fahrten=len(trips), bahnhoefe=len(used), bitfelder=len(bf_used),
+stand = dict(meta, fahrten=len(trips), bahnhoefe=len(used), bitfelder=len(bf_used), durchfahrtswege=len(dw),
              groesse_mb=round(target.stat().st_size / 1e6, 2),
              nach_gattung=dict(Counter(t[2] for t in trips).most_common(25)),
              fahrten_je_tag={str(mon + dt.timedelta(k)): sum(1 for t in trips if runs(t[4], mon + dt.timedelta(k)))
