@@ -68,6 +68,7 @@ kennt – Prüfliste für topo-daten (fehlende Verbindungen, reine Güterabschni
   "st": [[uic, name, lat, lon, kürzel], …],
   "bf": {bitfeldnummer: hex, …},                 // Verkehrstage; Bit i = Tag (i - offset) ab start
   "tr": [[fnr, verwaltung, gattung, linie, bitfeld, [station, an, ab, durchfahrt, …]], …],
+  "dwz": [[zugnr, u, v, [zwischenpunkte], [zeitanteile]], …],   // Weg aus der Publikation (tools/pub_wege.py)
   "dw"/"dws"/"dwx"/"dwf": [[u, v, [zwischenpunkte], [zeitanteile 0..1]], …],   // vermutete Durchfahrten (tools/durchfahrt.py)
   "schmal": [fahrtindex, …], "nur_schmal"/"nur_normal": [station, …] }
 ```
@@ -93,7 +94,10 @@ Zeiten in Minuten ab Mitternacht (Folgetag > 1440), Station als Index in `st`.
   Betriebspunkte gehören zu den Netzen der Fahrten, die sie führen.
   Fernverkehr (IC, IR, EC, ICE …, Tabelle `dwx`): Bahnhöfe, die keine 10 Fernverkehrsfahrten führen, kosten 4 Minuten Zuschlag –
   ein IC ohne Halt Zürich HB–Winterthur fährt über Oerlikon–Wallisellen, nicht über Stadelhofen–Stettbach.
-  Grenzen: wo zwei Wege ähnlich schnell sind, entscheidet maxspeed aus OSM; Betriebspunkte, an denen ein
+  Vorrang hat der Weg des Zuges gleicher Nummer in der Publikation (`tools/pub_wege.py`, Tabelle `dwz`): die publizierten
+  Durchfahrten, soweit es die Punkte in der HRDF gibt, Lücken dazwischen aus dem Gleisnetz. Das ist der Regelweg; an Tagen
+  mit Umleitung (Bauarbeiten) kann der Zug anders fahren.
+  Grenzen: wo zwei Wege ähnlich schnell sind und der Zug nicht in der Publikation steht, entscheidet maxspeed aus OSM; Betriebspunkte, an denen ein
   parallel geführtes Gleis eines anderen Netzes vorbeiführt, können fälschlich als Durchfahrt erscheinen.
 - **Strecke**: Folgen mit Zickzack (S1 früh Bern–Wankdorf–Zollikofen–Ostermundigen) werden nicht zur Basis der Strecke, sondern als «über …» angeboten.
 - **Durchbindungen** nach gleicher Zugnummer; **Wenden** (↺) sind Vermutungen (gleiche Linie, 3–45′).

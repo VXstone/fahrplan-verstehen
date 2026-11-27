@@ -62,6 +62,12 @@ jobs:
           gh release download fahrplandaten -R VXstone/NGE-fahrplan -p stations.csv -D roh --clobber
           python tools/build_pub.py --zuege roh/grafapla_${JAHR}_zuege.json.gz --fahrplan web/data/fahrplan.json.gz \
             --stations roh/stations.csv --out web/data
+      - name: Weg je Zug aus der Publikation (Grundgerüst für vermutete Durchfahrten)
+        continue-on-error: true
+        run: |
+          if [ -s web/data/publikation.json.gz ]; then
+            python tools/pub_wege.py --fahrplan web/data/fahrplan.json.gz --pub web/data/publikation.json.gz
+          fi
       - name: Güterzug-Liste (Mo–So, Muster, Achse)
         continue-on-error: true
         run: |

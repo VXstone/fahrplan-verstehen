@@ -52,16 +52,21 @@ async function loadData() {
   const mkDW = list => { const m = new Map(); (list || []).forEach(([u, v, inner, ant]) => {
     m.set(u + "-" + v, [inner, ant]); m.set(v + "-" + u, [inner.slice().reverse(), ant.slice().reverse().map(a => 1 - a)]); }); return m; };
   const DWN = mkDW(raw.dw), DWS = mkDW(raw.dws), DWX = mkDW(raw.dwx), DWF = mkDW(raw.dwf), SCHMAL = new Set(raw.schmal || []);
+  // Weg je Zug aus der Publikation (tools/pub_wege.py): «Zugnummer|u-v» → Zwischenpunkte + Zeitanteile
+  const znr = x => String(x).replace(/^0+/, "").split("+")[0];
+  const DWZ = new Map((raw.dwz || []).map(([z, u, v, inner, ant]) => [z + "|" + u + "-" + v, [inner, ant]]));
   const NUR = { S: new Set(raw.nur_schmal || []), N: new Set(raw.nur_normal || []) };   // Betriebspunkte nur an einem Spurweiten-Netz
   let nVerm = 0;
   const T = raw.tr.map(([fnr, admin, cat, line, bf, flat], i) => {
     const st = [], arr = [], dep = [], pass = [], vm = [], gp = [];   // gp[j]: Abschnitt j→j+1 im Gleisnetz geprüft
     // Fernverkehr: eigener Weg, wo Bahnhöfe ohne Fernverkehr dazwischen lägen (dwx, gleiche Regel wie tools/durchfahrt.py)
     const fv = /^(IC|ICN|ICE|IR|IRE|EC|EN|NJ|RJ|RJX|TGV|EXT|PE)$/.test(cat || "");
+    const zn = znr(fnr);
     const DW = SCHMAL.has(i) ? DWS : fv ? { get: k => DWX.get(k) || DWN.get(k) } : DWN;
     for (let k = 0; k < flat.length; k += 4) {
       if (k > 0) {   // vermutete Durchfahrten einfügen
-        const key = flat[k - 4] + "-" + flat[k], wn = DW.get(key), w = wn || DWF.get(key);
+        const key = flat[k - 4] + "-" + flat[k], wz = DWZ.size ? DWZ.get(zn + "|" + key) : null;
+        const wn = wz || DW.get(key), w = wn || DWF.get(key);
         const t0 = flat[k - 2] ?? flat[k - 3], t1 = flat[k + 1] ?? flat[k + 2];
         let ok = false;
         if (w && w[0].length && t0 != null && t1 != null && t1 >= t0 && !w[0].some(s => flat.some((x, j) => j % 4 === 0 && x === s))) {
@@ -79,7 +84,7 @@ async function loadData() {
   // Bitfelder als Bytes vorbereiten
   const byFnr = new Map();
   T.forEach(t => { const k = t.fnr; if (!byFnr.has(k)) byFnr.set(k, []); byFnr.get(k).push(t); });
-  D = { meta: raw.meta, S, T, byStation, byFnr, BF: raw.bf, NUR, nVerm, nDW: [raw.dw, raw.dws, raw.dwx, raw.dwf].reduce((n, l) => n + (l || []).length, 0) };
+  D = { meta: raw.meta, S, T, byStation, byFnr, BF: raw.bf, NUR, nVerm, nDW: [raw.dw, raw.dws, raw.dwx, raw.dwf, raw.dwz].reduce((n, l) => n + (l || []).length, 0) };
 }
 // Gleiszahlen je Abschnitt aus VXstone/topo-daten (tools/build_gleise.py): ab["uicA-uicB"] = [min, max, m, region]
 let GL = null;
@@ -1058,7 +1063,7 @@ function setDate(d) {
   $("dHeute").onclick = () => setDate(new Date().toISOString().slice(0, 10));
   document.querySelectorAll("#quelle button").forEach(b => b.onclick = () => setQuelle(b.dataset.q));
   $("zugform").addEventListener("submit", e => { e.preventDefault(); const v = $("inZ").value.trim(); if (v) showZug(v, PUB || state.quelle !== "tag" ? "pub" : "pub"); });
-  $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Züge ohne Zwischenpunkte (z. B. IC Bern–Thun) bekommen vermutete Durchfahrten über den schnellsten Weg im Gleisnetz von VXstone/topo-daten (OSM; im Ausland über den Fahrplan) (" + (D.nDW || 0) + " Abschnitte, " + (D.nVerm || 0).toLocaleString("de-CH") + " Lücken gefüllt); im Zugfeld mit ~ markiert. Gleiszahlen je Abschnitt aus VXstone/topo-daten (Regionen " + (GL ? Object.keys(GL.meta.regionen).join(", ") : "–") + "; Daten © OpenStreetMap-Mitwirkende, ODbL), übrige Abschnitte aus Begegnungen geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen. «Publikation», «Vergleich» und Güterzüge: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt.";
+  $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Züge ohne Zwischenpunkte (z. B. IC Bern–Thun) bekommen vermutete Durchfahrten: Weg des Zuges in der Publikation (grafische Fahrpläne, Regelweg), sonst schnellster Weg im Gleisnetz von VXstone/topo-daten (OSM; im Ausland über den Fahrplan) (" + (D.nDW || 0) + " Abschnitte, " + (D.nVerm || 0).toLocaleString("de-CH") + " Lücken gefüllt); im Zugfeld mit ~ markiert. Gleiszahlen je Abschnitt aus VXstone/topo-daten (Regionen " + (GL ? Object.keys(GL.meta.regionen).join(", ") : "–") + "; Daten © OpenStreetMap-Mitwirkende, ODbL), übrige Abschnitte aus Begegnungen geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen. «Publikation», «Vergleich» und Güterzüge: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt.";
   const p = new URLSearchParams(location.search);
   let d = p.get("datum") || new Date().toISOString().slice(0, 10);
   if (d < m.start || d > m.end) d = m.start > d ? m.start : m.end;
