@@ -25,6 +25,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--nge", required=True)
 ap.add_argument("--roh", required=True)
 ap.add_argument("--out", required=True)
+ap.add_argument("--netz", help="schweiz_bahn.json.gz aus VXstone/topo-daten (Gleisnetz für vermutete Durchfahrten)")
 a = ap.parse_args()
 
 sys.path.insert(0, a.nge)
@@ -88,8 +89,8 @@ meta = {
 # Wege für Züge ohne Zwischenpunkte (vermutete Durchfahrten, siehe tools/durchfahrt.py)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import durchfahrt  # noqa: E402
-dw = durchfahrt.tabelle(used, trips)
-data = {"meta": meta, "st": used, "bf": bf_used, "tr": trips, "dw": dw}
+dw = durchfahrt.tabelle(used, trips, a.netz)
+data = {"meta": meta, "st": used, "bf": bf_used, "tr": trips, **dw}
 target = out / "fahrplan.json.gz"
 with gzip.open(target, "wt", encoding="utf-8", compresslevel=9) as f:
     json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
@@ -106,7 +107,7 @@ def runs(bfid, day):
 
 
 mon = ref - dt.timedelta(days=ref.weekday())
-stand = dict(meta, fahrten=len(trips), bahnhoefe=len(used), bitfelder=len(bf_used), durchfahrtswege=len(dw),
+stand = dict(meta, fahrten=len(trips), bahnhoefe=len(used), bitfelder=len(bf_used), durchfahrtswege={k: len(v) for k, v in dw.items()},
              groesse_mb=round(target.stat().st_size / 1e6, 2),
              nach_gattung=dict(Counter(t[2] for t in trips).most_common(25)),
              fahrten_je_tag={str(mon + dt.timedelta(k)): sum(1 for t in trips if runs(t[4], mon + dt.timedelta(k)))

@@ -68,7 +68,8 @@ kennt – Prüfliste für topo-daten (fehlende Verbindungen, reine Güterabschni
   "st": [[uic, name, lat, lon, kürzel], …],
   "bf": {bitfeldnummer: hex, …},                 // Verkehrstage; Bit i = Tag (i - offset) ab start
   "tr": [[fnr, verwaltung, gattung, linie, bitfeld, [station, an, ab, durchfahrt, …]], …],
-  "dw": [[u, v, [zwischenpunkte], [zeitanteile 0..1]], …] }   // vermutete Durchfahrten (tools/durchfahrt.py)
+  "dw"/"dws"/"dwf": [[u, v, [zwischenpunkte], [zeitanteile 0..1]], …],   // vermutete Durchfahrten (tools/durchfahrt.py)
+  "schmal": [fahrtindex, …], "nur_schmal"/"nur_normal": [station, …] }
 ```
 
 Zeiten in Minuten ab Mitternacht (Folgetag > 1440), Station als Index in `st`.
@@ -79,10 +80,18 @@ Zeiten in Minuten ab Mitternacht (Folgetag > 1440), Station als Index in `st`.
 - **Ein-/Zweigleisigkeit**: aus topo-daten, wo eine Regionstopologie besteht (Band dunkel); sonst aus dem Fahrplan geschätzt (Begegnung auf der Strecke ⇒ zweigleisig, nur Kreuzungen in Bahnhöfen ⇒ vermutlich eingleisig; Band grau); im Band über dem Diagramm von Hand änderbar.
 - **Durchfahrtszeiten** ohne Angabe linear nach km.
 - **Weg von Zügen ohne Zwischenpunkte**: Die HRDF führt viele Schnellzüge nur mit ihren Halten (IC Bern–Thun ohne Münsingen).
-  `tools/durchfahrt.py` sucht für solche Lücken den schnellsten bekannten Weg über Abschnitte, die andere Züge mit Zwischenpunkten
-  befahren (Bern–Thun über Münsingen, nicht über Belp), und legt ihn als `dw` in die Daten; die Seite fügt die Punkte beim Laden
-  als Durchfahrt ein (im Zugfeld mit ~). Ohne das fehlten solche Züge auf Strecken, die sie nur durchfahren (Ostermundigen–Uttigen),
-  und lagen auf Parallelstrecken, die sie nicht befahren (Bern–Belp–Thun). Vermutung: wo es zwei ähnlich schnelle Wege gibt, kann sie danebenliegen.
+  `tools/durchfahrt.py` sucht für jedes Punktpaar den schnellsten Weg im Gleisnetz von [VXstone/topo-daten](https://github.com/VXstone/topo-daten)
+  (OSM-Extrakt `schweiz_bahn.json.gz`, Gewicht Länge/maxspeed, Normal- und Schmalspur getrennt, `tools/topo_wege.py`) und nimmt die
+  Betriebspunkte am Weg als Durchfahrt: sicher bis 35 m vom Weg, bis 120 m nur mit Fahrplanverbindung zum Nachbarpunkt
+  (Frutigen am Basistunnel ja, Roggwil-Wynau neben der Neubaustrecke nein); virtuelle Punkte (Bahn-2000-Strecke, Basistunnel) nicht.
+  Paare ausserhalb des Netzes (Ausland) über den Fahrplangraph (schnellster Weg über Abschnitte mit Zwischenpunkten).
+  Die Tabellen `dw` (Normalspur), `dws` (Schmalspur), `dwf` (Fahrplangraph) liegen in `fahrplan.json.gz`, dazu `schmal` (Fahrten)
+  und `nur_schmal`/`nur_normal` (Betriebspunkte); die Seite fügt die Punkte beim Laden ein (im Zugfeld mit ~).
+  Ein im Netz geprüfter Abschnitt ohne Zwischenpunkt heisst: der Zug fährt an keinem anderen Bahnhof vorbei – er wird nicht auf eine
+  Strecke gelegt, die dazwischen Bahnhöfe desselben Netzes hat (Rothrist–Olten durch den Born, nicht über Aarburg-Oftringen).
+  Grenzen: wo zwei Wege ähnlich schnell sind (Zürich–Winterthur), entscheidet maxspeed aus OSM; Betriebspunkte, an denen ein
+  parallel geführtes Gleis eines anderen Netzes vorbeiführt, können fälschlich als Durchfahrt erscheinen.
+- **Strecke**: Folgen mit Zickzack (S1 früh Bern–Wankdorf–Zollikofen–Ostermundigen) werden nicht zur Basis der Strecke, sondern als «über …» angeboten.
 - **Durchbindungen** nach gleicher Zugnummer; **Wenden** (↺) sind Vermutungen (gleiche Linie, 3–45′).
 
 ## Lokal ausprobieren

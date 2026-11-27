@@ -14,10 +14,12 @@ Vorgehen
   4. In jede Fahrt mit einer solchen Lücke die Zwischenpunkte als Durchfahrt einfügen, Zeit nach dem Anteil
      an der kürzesten Fahrzeit verteilt. Markierung im Feld «durchfahrt»: 2 = vermutet (1 = aus der HRDF).
 
-build_data.py legt nur die Wegtabelle als «dw» in fahrplan.json.gz (tabelle()); die Seite fügt die Punkte
-beim Laden ein, so bleibt die Datei klein. ergaenzen() macht dasselbe in Python (zum Prüfen).
+Mit --netz (schweiz_bahn.json.gz aus VXstone/topo-daten) gilt statt 2./3. der schnellste Weg im Gleisnetz
+(topo_wege.py, Normal- und Schmalspur getrennt); der Fahrplangraph bleibt für Paare ausserhalb des Netzes.
+build_data.py legt nur die Wegtabellen in fahrplan.json.gz (tabelle()); die Seite fügt die Punkte beim Laden ein,
+so bleibt die Datei klein. ergaenzen() macht dasselbe in Python (zum Prüfen).
 Arbeitet auf dem kompakten Format von fahrplan.json.gz (st, tr). Lokal prüfen:
-  python tools/durchfahrt.py web/data/fahrplan.json.gz [--out neu.json.gz] [--zeige "Bern" "Thun"]
+  python tools/durchfahrt.py web/data/fahrplan.json.gz [--netz schweiz_bahn.json.gz] [--out neu.json.gz] [--zeige "Bern" "Thun"]
 """
 import argparse
 import gzip
@@ -135,24 +137,117 @@ def wege(S, trips):
     return out
 
 
-def tabelle(S, trips):
-    """Wegtabelle für fahrplan.json.gz: [[u, v, [Zwischenpunkte], [Anteile]], …] nur in einer Richtung (u < v);
-    die Seite fügt die Punkte beim Laden ein (beide Richtungen)."""
-    W = wege(S, trips)
-    return [[u, v, inner, [round(a, 3) for a in ant]] for (u, v), (inner, ant) in sorted(W.items()) if u < v]
-
-
-def ergaenzen(S, trips):
-    """Fügt vermutete Durchfahrten in trips ein (an Ort). Gibt (Fahrten geändert, Punkte eingefügt) zurück."""
-    W = wege(S, trips)
-    n_t = n_p = 0
+def paare(S, trips):
+    """Alle Punktpaare (u < v) aufeinanderfolgender Punkte, Luftlinie ≥ MIN_KM."""
+    out = set()
     for t in trips:
+        f = t[5]
+        for i in range(0, len(f) - 4, 4):
+            u, v = f[i], f[i + 4]
+            if u != v:
+                d = _hav(S, u, v)
+                if d is not None and d >= MIN_KM:
+                    out.add((min(u, v), max(u, v)))
+    return out
+
+
+def gesamt(S, trips, netz=None, log=print):
+    """Wege für alle Paare, getrennt nach Spurweite: {"N": {…}, "S": {…}, "F": {…}} mit (u, v) → (inner, ant), u < v.
+    N/S: im Gleisnetz von topo-daten (netz = Pfad zu schweiz_bahn.json.gz), Normal- bzw. Schmalspur;
+    F: Paare, die in keinem der beiden Netze liegen (Ausland, ohne Koordinaten), aus dem Fahrplangraph (wege()).
+    «nur»: Betriebspunkte nur am Normal- bzw. nur am Schmalspurnetz. Dazu die Menge der Schmalspur-Fahrten (Index in trips)."""
+    fp = {(u, v): w for (u, v), w in wege(S, trips).items() if u < v}
+    if not netz:
+        return {"N": {}, "S": {}, "F": fp}, set()
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import topo_wege
+    roh = topo_wege.lade(netz)
+    P = paare(S, trips)
+    # Zwischenpunkte: Betriebspunkte in der Schweiz; virtuelle Punkte (Bahn-2000-Strecke, Basistunnel …)
+    # liegen nur ungefähr auf der Strecke und bleiben weg
+    kand = {s for t in trips for s in t[5][0::4] if S[s][2] is not None and str(S[s][0])[:2] == "85"}
+    kanten = {(min(f[i], f[i + 4]), max(f[i], f[i + 4])) for t in trips for f in (t[5],) for i in range(0, len(f) - 4, 4)}
+    netze = {art: topo_wege.Netz(roh, art) for art in ("N", "S")}
+    del roh
+    # Netz je Betriebspunkt vorläufig nach Lage: das nähere (beide, wenn ähnlich nah)
+    ab = {}
+    for s in kand:
+        for art, N in netze.items():
+            n = N.naechster(S[s][2], S[s][3])
+            ab[(s, art)] = topo_wege._km((S[s][2], S[s][3]), N.pos[n]) if n is not None else None
+    zu = {"N": set(), "S": set()}
+    for s in kand:
+        dn, ds = ab[(s, "N")], ab[(s, "S")]
+        if dn is not None and (ds is None or dn <= ds + 0.005):
+            zu["N"].add(s)
+        if ds is not None and (dn is None or ds <= dn + 0.005):
+            zu["S"].add(s)
+    # Spurweite je Fahrt: mehr Punkte nur am Schmalspurnetz als nur am Normalspurnetz → Schmalspur
+    schmal = set()
+    for i, t in enumerate(trips):
+        st = t[5][0::4]
+        n = sum(1 for s in st if s in zu["N"] and s not in zu["S"])
+        m = sum(1 for s in st if s in zu["S"] and s not in zu["N"])
+        if m > n:
+            schmal.add(i)
+    # Netz je Betriebspunkt endgültig: die Fahrten, die ihn führen (Chur: beide; Chur Wiesental, Untervaz-Trimmis: RhB)
+    zu = {"N": set(), "S": set()}
+    for i, t in enumerate(trips):
+        art = "S" if i in schmal else "N"
+        zu[art].update(s for s in t[5][0::4] if ab.get((s, art)) is not None)
+    out, gefunden = {}, set()
+    for art, N in netze.items():
+        W, g = topo_wege.wege(S, P, N, zu[art], kanten)
+        log(f"Gleisnetz {art}: {len(P)} Paare, {len(g)} im Netz gefunden, {len(W)} mit Zwischenpunkten")
+        # im Netz gefunden ohne Zwischenpunkte: leerer Eintrag – die Seite weiss dann, dass der Zug zwischen
+        # den beiden Punkten an keinem anderen Betriebspunkt vorbeifährt (Rothrist–Olten durch den Born)
+        for k in g:
+            W.setdefault(k, ([], []))
+        out[art] = W
+        gefunden |= g
+    out["F"] = {k: w for k, w in fp.items() if k not in gefunden}
+    log(f"Schmalspur-Fahrten: {len(schmal)}, Fahrplangraph für {len(out['F'])} Paare")
+    out["nur"] = {"N": sorted(zu["N"] - zu["S"]), "S": sorted(zu["S"] - zu["N"])}
+    return out, schmal
+
+
+def _liste(W):
+    return [[u, v, inner, [round(a, 3) for a in ant]] for (u, v), (inner, ant) in sorted(W.items())]
+
+
+def tabelle(S, trips, netz=None, log=print):
+    """Wegtabellen für fahrplan.json.gz: {"dw": […], "dws": […], "dwf": […], "schmal": [Fahrtindex, …]}.
+    Einträge [u, v, [Zwischenpunkte], [Anteile]] nur in einer Richtung (u < v), im Netz auch ohne Zwischenpunkte
+    (dann ist der Abschnitt «geprüft»: kein weiterer Betriebspunkt am Weg). «dw» Normalspur-, «dws» Schmalspurnetz,
+    «dwf» Fahrplangraph für Paare ausserhalb beider Netze. Die Seite nimmt für eine Fahrt dw bzw. (Schmalspur) dws,
+    sonst dwf, und fügt die Punkte beim Laden ein (beide Richtungen)."""
+    W, schmal = gesamt(S, trips, netz, log)
+    nur = W.pop("nur", {})
+    return {"dw": _liste(W["N"]), "dws": _liste(W["S"]), "dwf": _liste(W["F"]), "schmal": sorted(schmal),
+            "nur_schmal": nur.get("S", []), "nur_normal": nur.get("N", [])}
+
+
+def ergaenzen(S, trips, W, schmal=frozenset()):
+    """Fügt vermutete Durchfahrten aus W (gesamt()) in trips ein (an Ort).
+    Gibt (Fahrten geändert, Punkte eingefügt) zurück."""
+    WW = {}
+    for art, w in W.items():
+        if art != "F":
+            w = {**W["F"], **w}
+        d = dict(w)
+        d.update({(v, u): (inner[::-1], [1 - a for a in ant[::-1]]) for (u, v), (inner, ant) in w.items()})
+        WW[art] = d
+    n_t = n_p = 0
+    for ti, t in enumerate(trips):
+        Wt = WW["S" if ti in schmal else "N"]
         f = t[5]
         neu, geaendert = f[:4], False
         for i in range(0, len(f) - 4, 4):
             u, v = f[i], f[i + 4]
-            w = W.get((u, v))
-            if w:
+            w = Wt.get((u, v))
+            if w and w[0]:
                 t0 = _zeit(f[i + 2]) if _zeit(f[i + 2]) is not None else _zeit(f[i + 1])
                 t1 = _zeit(f[i + 5]) if _zeit(f[i + 5]) is not None else _zeit(f[i + 6])
                 inner, ant = w
@@ -173,16 +268,28 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("fahrplan")
     ap.add_argument("--out")
+    ap.add_argument("--netz", help="schweiz_bahn.json.gz aus VXstone/topo-daten (Release daten)")
     ap.add_argument("--zeige", nargs=2, action="append", default=[], metavar=("VON", "NACH"))
     a = ap.parse_args()
     d = json.load(gzip.open(a.fahrplan, "rt", encoding="utf-8"))
     S = d["st"]
-    W = wege(S, d["tr"])
+    W, schmal = gesamt(S, d["tr"], a.netz)
+    nur = W.pop("nur", {})
     idx = {s[1]: i for i, s in enumerate(S)}
     for von, nach in a.zeige:
-        w = W.get((idx.get(von), idx.get(nach)))
-        print(von, "→", nach, ":", " – ".join(S[x][1] for x in w[0]) if w else "unverändert")
-    print("Fahrten geändert, Punkte eingefügt:", ergaenzen(S, d["tr"]))
-    if a.out:
-        with gzip.open(a.out, "wt", encoding="utf-8", compresslevel=9) as f:
-            json.dump(d, f, ensure_ascii=False, separators=(",", ":"))
+        u, v = idx.get(von), idx.get(nach)
+        if u is None or v is None:
+            print("?", von, nach)
+            continue
+        for art in W:
+            w = W[art].get((min(u, v), max(u, v)))
+            if not w:
+                continue
+            inner = w[0] if u < v else w[0][::-1]
+            print(art, von, "→", nach, ":", " – ".join(S[x][1] for x in inner))
+    if a.out:   # Originalfahrten + Wegtabellen, wie build_data.py sie schreibt
+        d.update({"dw": _liste(W["N"]), "dws": _liste(W["S"]), "dwf": _liste(W["F"]), "schmal": sorted(schmal),
+                  "nur_schmal": nur.get("S", []), "nur_normal": nur.get("N", [])})
+        with gzip.open(a.out, "wt", encoding="utf-8", compresslevel=9) as fh:
+            json.dump(d, fh, ensure_ascii=False, separators=(",", ":"))
+    print("Fahrten geändert, Punkte eingefügt:", ergaenzen(S, d["tr"], W, schmal))
