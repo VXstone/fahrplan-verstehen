@@ -47,17 +47,37 @@ async function fetchGz(name) {
 async function loadData() {
   const raw = await fetchGz("fahrplan");
   const S = raw.st.map(([uic, name, lat, lon, abbr]) => ({ uic, name, lat, lon, abbr }));
+  // Wege für Züge ohne Zwischenpunkte (tools/durchfahrt.py): Paar u→v → Zwischenpunkte + Zeitanteile.
+  // dw Normalspurnetz, dws Schmalspurnetz (topo-daten), dwf Fahrplangraph für Paare ausserhalb beider Netze
+  const mkDW = list => { const m = new Map(); (list || []).forEach(([u, v, inner, ant]) => {
+    m.set(u + "-" + v, [inner, ant]); m.set(v + "-" + u, [inner.slice().reverse(), ant.slice().reverse().map(a => 1 - a)]); }); return m; };
+  const DWN = mkDW(raw.dw), DWS = mkDW(raw.dws), DWF = mkDW(raw.dwf), SCHMAL = new Set(raw.schmal || []);
+  const NUR = { S: new Set(raw.nur_schmal || []), N: new Set(raw.nur_normal || []) };   // Betriebspunkte nur an einem Spurweiten-Netz
+  let nVerm = 0;
   const T = raw.tr.map(([fnr, admin, cat, line, bf, flat], i) => {
-    const st = [], arr = [], dep = [], pass = [];
-    for (let k = 0; k < flat.length; k += 4) { st.push(flat[k]); arr.push(flat[k + 1]); dep.push(flat[k + 2]); pass.push(!!flat[k + 3]); }
-    return { i, fnr, admin, cat, line, bf, st, arr, dep, pass };
+    const st = [], arr = [], dep = [], pass = [], vm = [], gp = [];   // gp[j]: Abschnitt j→j+1 im Gleisnetz geprüft
+    const DW = SCHMAL.has(i) ? DWS : DWN;
+    for (let k = 0; k < flat.length; k += 4) {
+      if (k > 0) {   // vermutete Durchfahrten einfügen
+        const key = flat[k - 4] + "-" + flat[k], wn = DW.get(key), w = wn || DWF.get(key);
+        const t0 = flat[k - 2] ?? flat[k - 3], t1 = flat[k + 1] ?? flat[k + 2];
+        let ok = false;
+        if (w && w[0].length && t0 != null && t1 != null && t1 >= t0 && !w[0].some(s => flat.some((x, j) => j % 4 === 0 && x === s))) {
+          w[0].forEach((s, j) => { const m = t0 + (t1 - t0) * w[1][j]; gp.push(!!wn); st.push(s); arr.push(m); dep.push(m); pass.push(true); vm.push(true); });
+          nVerm++; ok = true;
+        }
+        gp.push(!!wn && (ok || !w[0].length));
+      }
+      st.push(flat[k]); arr.push(flat[k + 1]); dep.push(flat[k + 2]); pass.push(!!flat[k + 3]); vm.push(false);
+    }
+    return { i, fnr, admin, cat, line, bf, st, arr, dep, pass, sm: SCHMAL.has(i), vm: vm.includes(true) ? vm : null, gp: gp.includes(true) ? gp : null };
   });
   const byStation = new Map();
   T.forEach(t => new Set(t.st).forEach(s => { if (!byStation.has(s)) byStation.set(s, []); byStation.get(s).push(t.i); }));
   // Bitfelder als Bytes vorbereiten
   const byFnr = new Map();
   T.forEach(t => { const k = t.fnr; if (!byFnr.has(k)) byFnr.set(k, []); byFnr.get(k).push(t); });
-  D = { meta: raw.meta, S, T, byStation, byFnr, BF: raw.bf };
+  D = { meta: raw.meta, S, T, byStation, byFnr, BF: raw.bf, NUR, nVerm, nDW: [raw.dw, raw.dws, raw.dwf].reduce((n, l) => n + (l || []).length, 0) };
 }
 // Gleiszahlen je Abschnitt aus VXstone/topo-daten (tools/build_gleise.py): ab["uicA-uicB"] = [min, max, m, region]
 let GL = null;
@@ -198,8 +218,12 @@ function corridorDirect(a, b, via) {
   for (const sq of seqs) { const k = sq.join(","); cnt.set(k, (cnt.get(k) || 0) + 1); }
   const fam = [...cnt.entries()].map(([k, c]) => ({ s: k.split(",").map(Number), c }));
   const isSub = (small, big) => { let j = 0; for (const x of big) if (x === small[j]) j++; return j === small.length; };
+  // Folgen mit Umweg (Zickzack wie Wankdorf–Zollikofen–Ostermundigen) nur als Basis, wenn es keine andere gibt
+  const zick = s => s.some((x, j) => j > 0 && j < s.length - 1 &&
+    hav(D.S[s[j - 1]], D.S[x]) + hav(D.S[x], D.S[s[j + 1]]) > hav(D.S[s[j - 1]], D.S[s[j + 1]]) * 1.3 + 1);
+  if (fam.some(f => !zick(f.s))) fam.forEach(f => { f.zick = zick(f.s); });
   let base = null, bestScore = -1;
-  for (const f of fam) { let sc = 0; for (const g of fam) if (g.s.length <= f.s.length && isSub(g.s, f.s)) sc += g.c;
+  for (const f of fam) { if (f.zick) continue; let sc = 0; for (const g of fam) if (g.s.length <= f.s.length && isSub(g.s, f.s)) sc += g.c;
     const score = sc * 1000 + f.s.length; if (score > bestScore) { bestScore = score; base = f.s; } }
   // Weitere Halte einfügen, die zwischen zwei benachbarten Basis-Bahnhöfen liegen
   let ids = base.slice(); const variants = new Map();
@@ -210,7 +234,12 @@ function corridorDirect(a, b, via) {
       const p = ids.indexOf(s[j]);
       if (p < 0) { pending.push(s[j]); continue; }
       if (pending.length) {
-        if (p === lastPos + 1) { ids.splice(p, 0, ...pending); lastPos = p + pending.length; }
+        // nur einfügen, wenn die Halte zwischen den beiden Bahnhöfen liegen und kein Umweg sind
+        // (z. B. S1 früh morgens Wankdorf–Zollikofen–Ostermundigen: Zollikofen gehört nicht zwischen Wankdorf und Ostermundigen)
+        const path = [ids[p - 1], ...pending, ids[p]]; let len = 0;
+        for (let q = 1; q < path.length; q++) len += hav(D.S[path[q - 1]], D.S[path[q]]);
+        const umweg = len > hav(D.S[ids[p - 1]], D.S[ids[p]]) * 1.3 + 1;
+        if (p === lastPos + 1 && !umweg) { ids.splice(p, 0, ...pending); lastPos = p + pending.length; }
         else { const key = D.S[pending[0]].name; variants.set(key, (variants.get(key) || 0) + c); lastPos = p; }
         pending = [];
       } else lastPos = p;
@@ -279,13 +308,14 @@ function dayTrips(date, stationSet, src) {
     const arr = ts.slice().sort((x, y) => (x.dep.find(v => v != null) ?? 0) - (y.dep.find(v => v != null) ?? 0));
     while (arr.length) {
       let t = arr.shift(); if (done.has(t.i)) continue; done.add(t.i);
-      let cur = { ...t, parts: [t.i], st: t.st.slice(), arr: t.arr.slice(), dep: t.dep.slice(), pass: t.pass.slice(), cats: [series(t)] };
+      const gpOf = x => x.gp ? x.gp.slice() : new Array(Math.max(0, x.st.length - 1)).fill(false);
+      let cur = { ...t, parts: [t.i], st: t.st.slice(), arr: t.arr.slice(), dep: t.dep.slice(), pass: t.pass.slice(), gp: gpOf(t), cats: [series(t)] };
       let changed = true;
       while (changed) { changed = false;
         for (let j = 0; j < arr.length; j++) { const o = arr[j];
           if (o.st[0] === cur.st[cur.st.length - 1] && (o.dep[0] ?? 0) >= (cur.arr[cur.arr.length - 1] ?? 0)) {
             cur.dep[cur.dep.length - 1] = o.dep[0];
-            cur.st.push(...o.st.slice(1)); cur.arr.push(...o.arr.slice(1)); cur.dep.push(...o.dep.slice(1)); cur.pass.push(...o.pass.slice(1));
+            cur.st.push(...o.st.slice(1)); cur.arr.push(...o.arr.slice(1)); cur.dep.push(...o.dep.slice(1)); cur.pass.push(...o.pass.slice(1)); cur.gp.push(...gpOf(o));
             if (!cur.cats.includes(series(o))) cur.cats.push(series(o));
             done.add(o.i); arr.splice(j, 1); changed = true; break; } } }
       cur.series = cur.cats.length > 1 ? cur.cats.slice().sort().join("/") : cur.cats[0];
@@ -371,6 +401,14 @@ function model() {
       // (z. B. Bergstrecke Kandersteg–Goppenstein statt Basistunnel) → nicht auf die Strecke legen
       const i0 = cur[cur.length - 1], i1 = pos[j];
       let umweg = false;
+      // Abschnitt im Gleisnetz geprüft (topo-daten), aber die Strecke hat dazwischen weitere Bahnhöfe:
+      // der Zug fährt dort nicht vorbei (z. B. Rothrist–Olten durch den Born, nicht über Aarburg-Oftringen)
+      if (i1 - i0 === 1 && t.gp && t.gp[i0] && Math.abs(p1 - p0) > 1) {
+        const lo = Math.min(p0, p1), hi = Math.max(p0, p1);
+        // nur echte Bahnhöfe desselben Spurweiten-Netzes zählen (SBB-Zug Landquart–Chur an den RhB-Halten vorbei: auf der Strecke lassen)
+        const fremd = t.sm ? D.NUR.N : D.NUR.S;
+        for (let c = lo + 1; c < hi && !umweg; c++) { const q = D.S[ids[c]]; if (String(q.uic).startsWith("85") && q.lat != null && !fremd.has(ids[c])) umweg = true; }
+      }
       if (i1 - i0 > 1) {   // Zwischenpunkte des Zuges, die nicht auf der Strecke liegen: weiter als 3 km von ihr weg?
         const lo = Math.min(p0, p1), hi = Math.max(p0, p1);
         for (let k = i0 + 1; k < i1 && !umweg; k++) { const q = D.S[t.st[k]]; if (q.lat == null) continue;
@@ -1018,7 +1056,7 @@ function setDate(d) {
   $("dHeute").onclick = () => setDate(new Date().toISOString().slice(0, 10));
   document.querySelectorAll("#quelle button").forEach(b => b.onclick = () => setQuelle(b.dataset.q));
   $("zugform").addEventListener("submit", e => { e.preventDefault(); const v = $("inZ").value.trim(); if (v) showZug(v, PUB || state.quelle !== "tag" ? "pub" : "pub"); });
-  $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Gleiszahlen je Abschnitt aus VXstone/topo-daten (Regionen " + (GL ? Object.keys(GL.meta.regionen).join(", ") : "–") + "; Daten © OpenStreetMap-Mitwirkende, ODbL), übrige Abschnitte aus Begegnungen geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen. «Publikation», «Vergleich» und Güterzüge: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt.";
+  $("note").innerHTML = "Quelle: HRDF (opentransportdata.swiss), aufbereitet mit VXstone/NGE-fahrplan. Enthält alle Bahnfahrten der Schweizer Fahrplandaten, auch grenznahe Strecken im Ausland. Kilometer: Luftlinie zwischen aufeinanderfolgenden Halte- und Durchfahrtspunkten. Durchfahrtszeiten ohne Angabe linear geschätzt. Züge ohne Zwischenpunkte (z. B. IC Bern–Thun) bekommen vermutete Durchfahrten über den schnellsten Weg im Gleisnetz von VXstone/topo-daten (OSM; im Ausland über den Fahrplan) (" + (D.nDW || 0) + " Abschnitte, " + (D.nVerm || 0).toLocaleString("de-CH") + " Lücken gefüllt); im Zugfeld mit ~ markiert. Gleiszahlen je Abschnitt aus VXstone/topo-daten (Regionen " + (GL ? Object.keys(GL.meta.regionen).join(", ") : "–") + "; Daten © OpenStreetMap-Mitwirkende, ODbL), übrige Abschnitte aus Begegnungen geschätzt. Durchbindungen nach gleicher Zugnummer; Wenden (↺) sind Vermutungen. «Publikation», «Vergleich» und Güterzüge: grafische Fahrpläne, veröffentlicht von der Systemaufgabe Kundeninformation (SKI) auf oev-info.ch (erstellt von SBB Infrastruktur, Fahrplan & Netzdesign); Lizenz bzw. Nutzungsbedingungen ungeklärt.";
   const p = new URLSearchParams(location.search);
   let d = p.get("datum") || new Date().toISOString().slice(0, 10);
   if (d < m.start || d > m.end) d = m.start > d ? m.start : m.end;

@@ -42,8 +42,16 @@ jobs:
           ARGS=""
           if [ -n "${{ inputs.year }}" ]; then ARGS="--year ${{ inputs.year }}"; fi
           python lib/nge/tools/fahrplandaten.py roh $ARGS
+      - name: Gleisnetz aus topo-daten (OSM) für vermutete Durchfahrten
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download daten -R VXstone/topo-daten -p schweiz_bahn.json.gz -D roh --clobber
       - name: Jahresdaten für die Seite bauen
-        run: python tools/build_data.py --nge lib/nge --roh roh --out web/data
+        run: |
+          ARGS=""
+          if [ -s roh/schweiz_bahn.json.gz ]; then ARGS="--netz roh/schweiz_bahn.json.gz"; fi
+          python tools/build_data.py --nge lib/nge --roh roh --out web/data $ARGS
       - name: Publikation (grafische Fahrpläne SBB) aufbereiten
         continue-on-error: true
         env:
